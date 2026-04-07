@@ -1,0 +1,10 @@
+﻿{
+  "task_id": "demo_b",
+  "branch": "task/demo_b-521aa3bc",
+  "path": "C:\\Users\\24719\\AppData\\Local\\Temp\\codelite-wt-demo-20260407224804\\runtime\\worktrees\\wt-demo_b-521aa3bc-task-b",
+  "base_ref": "HEAD",
+  "created_at": "2026-04-07T14:48:04.849538+00:00",
+  "head": "1f66cd150e8a3cf0e56e3b3e6ae9353243b1ca2e",
+  "attached": true,
+  "path_exists": true
+}

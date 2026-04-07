@@ -1,0 +1,12 @@
+﻿worktree C:/Users/24719/AppData/Local/Temp/codelite-wt-demo-20260407224624
+HEAD 72fe918287ddfe89dfdb7f0e42ab90aea2cf2b81
+branch refs/heads/main
+
+worktree C:/Users/24719/AppData/Local/Temp/codelite-wt-demo-20260407224624/runtime/worktrees/wt-demo_a-f22183a9-task-a
+HEAD 72fe918287ddfe89dfdb7f0e42ab90aea2cf2b81
+branch refs/heads/task/demo_a-f22183a9
+
+worktree C:/Users/24719/AppData/Local/Temp/codelite-wt-demo-20260407224624/runtime/worktrees/wt-demo_b-521aa3bc-task-b
+HEAD 72fe918287ddfe89dfdb7f0e42ab90aea2cf2b81
+branch refs/heads/task/demo_b-521aa3bc
+

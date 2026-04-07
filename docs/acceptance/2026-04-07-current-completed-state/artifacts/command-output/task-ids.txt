@@ -1,0 +1,3 @@
+﻿manual_task_id=acceptance-manual-224623
+conflict_task_id=acceptance-conflict-224623
+expired_task_id=acceptance-expired-224623

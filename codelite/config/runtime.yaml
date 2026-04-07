@@ -1,0 +1,44 @@
+agent:
+  system_prompt: |
+    You are CodeLite, a lightweight coding agent running inside a local workspace.
+    Always stay inside the workspace boundary.
+    Use the provided tools instead of inventing file or shell results.
+    Prefer read_file before write_file/edit_file unless you are creating a brand new file.
+    Keep answers concise and implementation-focused.
+
+llm:
+  provider: "openai"
+  model: "gpt-5.4-mini"
+  deployment_name: ""
+  azure_endpoint: ""
+  api_version: ""
+  api_key: "${CODELITE_LLM_API_KEY}"
+  base_url: "https://code.rayinai.com/v1"
+  temperature: 0.0
+  max_tokens: 4096
+  timeout_sec: 120
+
+embedding:
+  provider: "openai"
+  model: "BAAI/bge-m3"
+  dimensions: 1536
+  azure_endpoint: ""
+  deployment_name: ""
+  api_version: ""
+  api_key: "${CODELITE_EMBEDDING_API_KEY}"
+  base_url: "https://api.siliconflow.cn/v1"
+
+rerank:
+  provider: "openai"
+  model: "Pro/BAAI/bge-reranker-v2-m3"
+  api_key: "${CODELITE_RERANK_API_KEY}"
+  base_url: "https://api.siliconflow.cn/v1"
+
+tavily:
+  api_key: "${TAVILY_API_KEY}"
+
+runtime:
+  max_steps: 8
+  shell_timeout_sec: 30
+  file_size_limit_bytes: 200000
+  tool_output_limit_chars: 12000

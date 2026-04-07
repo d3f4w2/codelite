@@ -1,0 +1,2 @@
+﻿{'task_id': 'acceptance-manual-224623', 'title': 'Acceptance Manual Task', 'status': 'done', 'created_at': '2026-04-07T14:46:23.909704+00:00', 'updated_at': '2026-04-07T14:46:24.023393+00:00', 'metadata': {}, 'lease_id': None, 'lease_owner': None, 'lease_expires_at': None, 'blocked_reason': None}
+C:\Users\24719\Desktop\codelite\runtime\tasks\acceptance-manual-224623-b86237b2.json

@@ -1,0 +1,34 @@
+﻿{
+  "version": "0.0.0",
+  "python": "3.13.11",
+  "platform": "Windows 11",
+  "cwd": "C:\\Users\\24719\\Desktop\\codelite",
+  "workspace_root": "C:\\Users\\24719\\Desktop\\codelite",
+  "runtime_dir": "C:\\Users\\24719\\Desktop\\codelite\\runtime",
+  "events_path": "C:\\Users\\24719\\Desktop\\codelite\\runtime\\events.jsonl",
+  "sessions_dir": "C:\\Users\\24719\\Desktop\\codelite\\runtime\\sessions",
+  "session_count": 13,
+  "event_count": 242,
+  "last_session_id": "20260407T090103Z-5433d081",
+  "llm": {
+    "provider": "openai",
+    "model": "gpt-5.4-mini",
+    "base_url": "https://code.rayinai.com/v1",
+    "configured": true
+  },
+  "embedding": {
+    "provider": "openai",
+    "model": "BAAI/bge-m3",
+    "base_url": "https://api.siliconflow.cn/v1",
+    "configured": true
+  },
+  "rerank": {
+    "provider": "openai",
+    "model": "Pro/BAAI/bge-reranker-v2-m3",
+    "base_url": "https://api.siliconflow.cn/v1",
+    "configured": true
+  },
+  "tavily": {
+    "configured": true
+  }
+}

@@ -1,0 +1,6 @@
+﻿Wrote 11 bytes to runtime\manual-file.txt
+1: hello
+2: world
+Edited runtime\manual-file.txt
+1: hello
+2: codelite

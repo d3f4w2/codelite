@@ -1,0 +1,5 @@
+﻿Traceback (most recent call last):
+  File "<stdin>", line 5, in <module>
+  File "C:\Users\24719\Desktop\codelite\codelite\storage\tasks.py", line 153, in acquire_lease
+    raise LeaseConflictError(f"task `{task_id}` already leased by `{current_lease.owner}`")
+codelite.storage.tasks.LeaseConflictError: task `acceptance-conflict-224623` already leased by `alpha`

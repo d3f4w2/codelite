@@ -8,18 +8,46 @@
 python -m pip install -e .
 ```
 
-安装后可直接使用：
+### 0.1 配置模型与 API
+
+`v0.0` 默认读取包内的 [`codelite/config/runtime.yaml`](codelite/config/runtime.yaml)，其中主模型已锁定为：
+
+- `provider=openai`
+- `model=gpt-5.4-mini`
+- `base_url=https://code.rayinai.com/v1`
+
+为避免把真实密钥写进仓库，运行时从环境变量读取：
+
+```powershell
+$env:CODELITE_LLM_API_KEY="your-llm-key"
+$env:CODELITE_EMBEDDING_API_KEY="your-embedding-key"
+$env:CODELITE_RERANK_API_KEY="your-rerank-key"
+$env:TAVILY_API_KEY="your-tavily-key"
+```
+
+### 0.2 常用命令
 
 ```powershell
 codelite
 codelite version
-codelite status --json
+codelite health --json
+codelite run "读取 README 并总结当前 v0.0 能力"
+codelite session replay --last 1
 ```
 
 说明：
 
 - 直接输入 `codelite` 会进入交互式命令行。
-- 这是 v0.0 地基能力，后续所有阶段都通过同一个入口体验实际效果。
+- 运行时会自动落盘到 `runtime/events.jsonl` 与 `runtime/sessions/*.jsonl`。
+- `session replay` 可直接回放最近一次会话事件。
+
+### 0.3 当前 v0.0 已落地的能力
+
+- 主循环：最小 `plan -> act(tool) -> observe -> next`
+- 工具：`bash`、`read_file`、`write_file`、`edit_file`
+- 护栏：危险命令拦截、工作区路径越界拦截
+- 持久化：全局事件流 + 单会话 JSONL
+- 可观测：`health`、`session replay`
 
 ## 1. 项目定位
 

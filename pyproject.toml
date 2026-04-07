@@ -9,7 +9,7 @@ description = "CodeLite CLI foundation"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "CodeLite Team" }]
-dependencies = []
+dependencies = ["PyYAML>=6.0"]
 
 [project.scripts]
 codelite = "codelite.cli:main"
@@ -17,3 +17,6 @@ codelite = "codelite.cli:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["codelite*"]
+
+[tool.setuptools.package-data]
+codelite = ["config/*.yaml"]

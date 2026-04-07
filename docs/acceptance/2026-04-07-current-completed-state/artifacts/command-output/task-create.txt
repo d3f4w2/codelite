@@ -1,0 +1,4 @@
+﻿55b813a10e4e4f99b4333344b77aa5f9
+{'task_id': 'acceptance-manual-224623', 'title': 'Acceptance Manual Task', 'status': 'leased', 'created_at': '2026-04-07T14:46:23.909704+00:00', 'updated_at': '2026-04-07T14:46:23.910646+00:00', 'metadata': {}, 'lease_id': '55b813a10e4e4f99b4333344b77aa5f9', 'lease_owner': 'tester', 'lease_expires_at': '2026-04-07T15:01:23.910595+00:00', 'blocked_reason': None}
+C:\Users\24719\Desktop\codelite\runtime\tasks\acceptance-manual-224623-b86237b2.json
+C:\Users\24719\Desktop\codelite\runtime\leases\acceptance-manual-224623-b86237b2.lock

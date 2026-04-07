@@ -7,6 +7,13 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+pytest-cache-files-*/
 *.egg-info/
 dist/
 build/
+
+# Local runtime/config
+runtime/
+tests/.tmp/
+.env
+.env.*
