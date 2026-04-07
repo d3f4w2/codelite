@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codelite"
+version = "0.0.0"
+description = "CodeLite CLI foundation"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "CodeLite Team" }]
+dependencies = []
+
+[project.scripts]
+codelite = "codelite.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["codelite*"]

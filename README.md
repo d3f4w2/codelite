@@ -1,4 +1,25 @@
-# CodeLite: 轻量可控的命令行 Code Agent（对标 Claude Code）
+﻿# CodeLite: 轻量可控的命令行 Code Agent（对标 Claude Code）
+
+## 0. 快速开始（v0.0 CLI）
+
+先在仓库根目录安装本地命令行入口：
+
+```powershell
+python -m pip install -e .
+```
+
+安装后可直接使用：
+
+```powershell
+codelite
+codelite version
+codelite status --json
+```
+
+说明：
+
+- 直接输入 `codelite` 会进入交互式命令行。
+- 这是 v0.0 地基能力，后续所有阶段都通过同一个入口体验实际效果。
 
 ## 1. 项目定位
 

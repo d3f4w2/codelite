@@ -3,6 +3,32 @@
 日期：2026-04-07（v0.2.1 封版更新）  
 目标：在 v0.2 基础上并入 9 项关键机制，形成“可并行、可恢复、可巡检、可评测、可进化”的工程封版方案。
 
+## 0. v0.0 地基版（一切基础）
+
+定位：`v0.0` 不是“功能版本”，而是“生存版本”。  
+原则：如果 `v0.0` 不稳定，后续 `v0.1/v0.2/v0.2.1` 一律不推进。
+
+`v0.0` 最小闭环（必须全部达标）：
+
+1. `while-loop + tool_use dispatch` 可持续运行
+2. 基础工具可用：`bash/read_file/write_file/edit_file`
+3. 基础安全护栏：危险命令拦截、路径越界拦截
+4. 会话可恢复：最小 JSONL 持久化与 replay
+5. 最小可观测：事件日志可落盘、失败可定位
+
+`v0.0` 出口门槛（Gate）：
+
+- 主循环稳定运行（无人工干预）`>= 30 min`
+- 基础工具调用成功率 `>= 95%`
+- 危险命令误执行率 `0`
+- 路径越界拦截率 `100%`
+
+`v0.0` 交付物：
+
+- 可运行 CLI 主循环
+- `runtime/events.jsonl` 与 `runtime/sessions/*.jsonl`
+- `tests/core/test_v00_smoke.py`
+
 ## 1. 强化目标（相对 v0.1）
 
 本版不是“多加功能”，而是把执行强度拉满：
@@ -259,7 +285,7 @@ CLI (entry)
 
 ### 7.1 对照组定义
 
-- `B0`：裸 loop + 基础工具
+- `B0`：即 `v0.0`（裸 loop + 基础工具）
 - `C1`：v0.1（todo + compact + policy + event）
 - `C2`：v0.2（C1 + worktree + cron + heart + watchdog）
 - `C2.1`：v0.2.1（C2 + delivery + resilience + lanes + validate + retrieval + memory + model routing）
@@ -371,6 +397,7 @@ codelite/
 
 ### Phase 0（2 天）：骨架与约束
 
+- 先达成 `v0.0 Gate`，作为后续阶段前置条件
 - 固化任务状态机、事件模型、目录规范
 - 接入基础 loop + tool router + session store
 
