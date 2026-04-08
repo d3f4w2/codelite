@@ -50,6 +50,145 @@ def _configure_stdio() -> None:
         stream.reconfigure(errors="replace")
 
 
+def _split_relaxed_json_items(raw: str) -> list[str]:
+    parts: list[str] = []
+    buf: list[str] = []
+    depth = 0
+    in_quote: str | None = None
+    escaped = False
+
+    for ch in raw:
+        if in_quote is not None:
+            buf.append(ch)
+            if escaped:
+                escaped = False
+                continue
+            if ch == "\\":
+                escaped = True
+                continue
+            if ch == in_quote:
+                in_quote = None
+            continue
+
+        if ch in {'"', "'"}:
+            in_quote = ch
+            buf.append(ch)
+            continue
+        if ch in "{[":
+            depth += 1
+        elif ch in "}]":
+            depth -= 1
+            if depth < 0:
+                raise ValueError("invalid relaxed JSON: unbalanced brackets")
+
+        if ch == "," and depth == 0:
+            part = "".join(buf).strip()
+            if not part:
+                raise ValueError("invalid relaxed JSON: empty item")
+            parts.append(part)
+            buf = []
+            continue
+        buf.append(ch)
+
+    if in_quote is not None or depth != 0:
+        raise ValueError("invalid relaxed JSON: unterminated quote or bracket")
+
+    tail = "".join(buf).strip()
+    if tail:
+        parts.append(tail)
+    elif raw.strip():
+        raise ValueError("invalid relaxed JSON: trailing comma")
+    return parts
+
+
+def _parse_relaxed_json_string(raw: str) -> str:
+    text = raw.strip()
+    if len(text) >= 2 and text[0] == '"' and text[-1] == '"':
+        return str(json.loads(text))
+    if len(text) >= 2 and text[0] == "'" and text[-1] == "'":
+        body = text[1:-1]
+        return body.replace("\\'", "'").replace("\\\\", "\\")
+    return text
+
+
+def _parse_relaxed_json_value(raw: str) -> Any:
+    text = raw.strip()
+    if not text:
+        raise ValueError("invalid relaxed JSON: empty value")
+    if text.startswith("{") and text.endswith("}"):
+        return _parse_relaxed_json_object(text[1:-1])
+    if text.startswith("[") and text.endswith("]"):
+        return _parse_relaxed_json_array(text[1:-1])
+    if (text.startswith('"') and text.endswith('"')) or (text.startswith("'") and text.endswith("'")):
+        return _parse_relaxed_json_string(text)
+
+    lowered = text.lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    if lowered == "null":
+        return None
+
+    if text[0] in "-0123456789":
+        try:
+            if any(ch in text for ch in ".eE"):
+                return float(text)
+            return int(text)
+        except ValueError:
+            pass
+    return text
+
+
+def _parse_relaxed_json_object(raw: str) -> dict[str, Any]:
+    text = raw.strip()
+    if not text:
+        return {}
+    payload: dict[str, Any] = {}
+    for item in _split_relaxed_json_items(text):
+        if ":" not in item:
+            raise ValueError("invalid relaxed JSON object: missing ':'")
+        key_raw, value_raw = item.split(":", 1)
+        key = _parse_relaxed_json_string(key_raw)
+        if not key:
+            raise ValueError("invalid relaxed JSON object: empty key")
+        payload[key] = _parse_relaxed_json_value(value_raw)
+    return payload
+
+
+def _parse_relaxed_json_array(raw: str) -> list[Any]:
+    text = raw.strip()
+    if not text:
+        return []
+    return [_parse_relaxed_json_value(item) for item in _split_relaxed_json_items(text)]
+
+
+def _parse_json_arg(raw: str, *, field: str, expected_type: type[Any] | tuple[type[Any], ...] | None = None) -> Any:
+    text = raw.strip()
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as strict_error:
+        try:
+            if text.startswith("{") and text.endswith("}"):
+                parsed = _parse_relaxed_json_object(text[1:-1])
+            elif text.startswith("[") and text.endswith("]"):
+                parsed = _parse_relaxed_json_array(text[1:-1])
+            else:
+                raise ValueError("relaxed mode only supports object/array")
+        except Exception as relaxed_error:
+            raise RuntimeError(f"invalid JSON for `{field}`: {strict_error.msg}") from relaxed_error
+
+    if expected_type is None:
+        return parsed
+    if isinstance(expected_type, tuple):
+        expected_names = " or ".join(item.__name__ for item in expected_type)
+    else:
+        expected_names = expected_type.__name__
+    if not isinstance(parsed, expected_type):
+        raise RuntimeError(f"`{field}` must decode to {expected_names}")
+    return parsed
+
+
 @dataclass
 class RuntimeInfo:
     version: str
@@ -799,7 +938,7 @@ def cmd_delivery_status(args: argparse.Namespace) -> int:
 
 def cmd_delivery_enqueue(args: argparse.Namespace) -> int:
     services = build_runtime()
-    payload = json.loads(args.payload_json)
+    payload = _parse_json_arg(args.payload_json, field="payload-json", expected_type=dict)
     item = services.delivery_queue.enqueue(args.kind, payload, max_attempts=args.max_attempts)
     if args.json:
         _print_json(item.to_dict())
@@ -912,7 +1051,7 @@ def cmd_team_create(args: argparse.Namespace) -> int:
         name=args.name,
         strategy=args.strategy,
         max_subagents=args.max_subagents,
-        metadata=json.loads(args.metadata_json) if args.metadata_json else {},
+        metadata=_parse_json_arg(args.metadata_json, field="metadata-json", expected_type=dict) if args.metadata_json else {},
     ).to_dict()
     if args.json:
         _print_json(payload)
@@ -933,7 +1072,7 @@ def cmd_team_list(args: argparse.Namespace) -> int:
 
 def cmd_subagent_spawn(args: argparse.Namespace) -> int:
     services = build_runtime(model_client=getattr(args, "_model_client", None))
-    metadata = json.loads(args.metadata_json) if args.metadata_json else {}
+    metadata = _parse_json_arg(args.metadata_json, field="metadata-json", expected_type=dict) if args.metadata_json else {}
     if args.mode == "sync":
         payload = services.agent_team_runtime.run_subagent_inline(
             team_id=args.team_id,
@@ -1002,8 +1141,8 @@ def cmd_mcp_add(args: argparse.Namespace) -> int:
     payload = services.mcp_runtime.add_server(
         name=args.name,
         command=args.server_command,
-        args=json.loads(args.args_json) if args.args_json else [],
-        env=json.loads(args.env_json) if args.env_json else {},
+        args=_parse_json_arg(args.args_json, field="args-json", expected_type=list) if args.args_json else [],
+        env=_parse_json_arg(args.env_json, field="env-json", expected_type=dict) if args.env_json else {},
         cwd=args.cwd or "",
         description=args.description or "",
         enabled=not args.disabled,
@@ -1039,7 +1178,7 @@ def cmd_mcp_call(args: argparse.Namespace) -> int:
     services = build_runtime()
     payload = services.mcp_runtime.call(
         name=args.name,
-        request=json.loads(args.request_json),
+        request=_parse_json_arg(args.request_json, field="request-json", expected_type=dict),
         timeout_sec=args.timeout_sec,
     )
     if args.json:
@@ -1053,7 +1192,7 @@ def cmd_background_run(args: argparse.Namespace) -> int:
     services = build_runtime()
     payload = services.skill_runtime.enqueue_background_task(
         name=args.name,
-        payload=json.loads(args.payload_json),
+        payload=_parse_json_arg(args.payload_json, field="payload-json", expected_type=dict),
         session_id=args.session_id,
     )
     if args.json:
@@ -1172,7 +1311,7 @@ def cmd_critic_log(args: argparse.Namespace) -> int:
     payload = services.critic_refiner.log_failure(
         kind=args.kind,
         message=args.message,
-        metadata=json.loads(args.metadata_json) if args.metadata_json else {},
+        metadata=_parse_json_arg(args.metadata_json, field="metadata-json", expected_type=dict) if args.metadata_json else {},
     )
     if args.json:
         _print_json(payload)

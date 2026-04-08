@@ -129,7 +129,25 @@ class DeliveryQueue:
         }
 
     def process_one(self, handlers: dict[str, DeliveryHandler]) -> dict[str, Any] | None:
+        return self._process_one(handlers)
+
+    def process_one_for_kinds(
+        self,
+        handlers: dict[str, DeliveryHandler],
+        *,
+        allowed_kinds: set[str],
+    ) -> dict[str, Any] | None:
+        return self._process_one(handlers, allowed_kinds=allowed_kinds)
+
+    def _process_one(
+        self,
+        handlers: dict[str, DeliveryHandler],
+        *,
+        allowed_kinds: set[str] | None = None,
+    ) -> dict[str, Any] | None:
         due_items = self._due_pending_items()
+        if allowed_kinds is not None:
+            due_items = [item for item in due_items if item.kind in allowed_kinds]
         if not due_items:
             return None
         item = due_items[0]
@@ -163,10 +181,28 @@ class DeliveryQueue:
         return {"delivery_id": item.delivery_id, "status": "done", "result": completed.last_result}
 
     def process_all(self, handlers: dict[str, DeliveryHandler], *, max_items: int | None = None) -> list[dict[str, Any]]:
+        return self._process_all(handlers, max_items=max_items)
+
+    def process_all_for_kinds(
+        self,
+        handlers: dict[str, DeliveryHandler],
+        *,
+        allowed_kinds: set[str],
+        max_items: int | None = None,
+    ) -> list[dict[str, Any]]:
+        return self._process_all(handlers, allowed_kinds=allowed_kinds, max_items=max_items)
+
+    def _process_all(
+        self,
+        handlers: dict[str, DeliveryHandler],
+        *,
+        allowed_kinds: set[str] | None = None,
+        max_items: int | None = None,
+    ) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
         limit = max_items or 100
         for _ in range(limit):
-            result = self.process_one(handlers)
+            result = self._process_one(handlers, allowed_kinds=allowed_kinds)
             if result is None:
                 break
             results.append(result)

@@ -147,6 +147,71 @@ def test_v022_agent_team_and_subagent_queue_process(
     assert Path(detail["result_path"]).exists()
 
 
+def test_v022_subagent_process_ignores_non_subagent_deliveries(
+    workspace_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepare_env(monkeypatch, workspace_dir)
+
+    team = run_main_json(
+        [
+            "team",
+            "create",
+            "--name",
+            "mixed-queue-team",
+            "--strategy",
+            "parallel",
+            "--json",
+        ]
+    )
+    team_id = team["team_id"]
+
+    spawned = run_main_json(
+        [
+            "subagent",
+            "spawn",
+            "--team-id",
+            team_id,
+            "--prompt",
+            "Summarize the task in one sentence.",
+            "--session-id",
+            "parent-session",
+            "--mode",
+            "queue",
+            "--json",
+        ]
+    )
+    subagent_id = spawned["subagent"]["subagent_id"]
+
+    run_main_json(
+        [
+            "delivery",
+            "enqueue",
+            "--kind",
+            "demo_echo",
+            "--payload-json",
+            json.dumps({"note": "leave me pending"}),
+            "--json",
+        ]
+    )
+
+    processed = run_main_json(
+        [
+            "subagent",
+            "process",
+            "--json",
+        ],
+        model_client=ScriptedSubagentModelClient(),
+    )
+    assert any(item["subagent_id"] == subagent_id for item in processed)
+
+    detail = run_main_json(["subagent", "show", "--subagent-id", subagent_id, "--json"])
+    assert detail["status"] == "done"
+
+    delivery_status = run_main_json(["delivery", "status", "--json"])
+    assert any(item["kind"] == "demo_echo" for item in delivery_status["pending"])
+
+
 def test_v022_mcp_entrypoint_add_list_and_call(
     workspace_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -198,3 +263,57 @@ def test_v022_mcp_entrypoint_add_list_and_call(
     assert called["response"]["ok"] is True
     assert called["response"]["method"] == "ping"
     assert Path(called["invocation_path"]).exists()
+
+
+def test_v022_mcp_entrypoint_accepts_relaxed_json_inputs(
+    workspace_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepare_env(monkeypatch, workspace_dir)
+    (workspace_dir / "echo_mcp.py").write_text(
+        "\n".join(
+            [
+                "import json",
+                "import sys",
+                "",
+                "line = sys.stdin.readline().strip()",
+                "payload = json.loads(line) if line else {}",
+                "print(json.dumps({'ok': True, 'method': payload.get('method'), 'id': payload.get('id')}))",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    added = run_main_json(
+        [
+            "mcp",
+            "add",
+            "--name",
+            "echo-relaxed",
+            "--command",
+            "python",
+            "--args-json",
+            "[echo_mcp.py]",
+            "--env-json",
+            "{MCP_TAG:manual}",
+            "--json",
+        ]
+    )
+    assert added["name"] == "echo-relaxed"
+    assert added["args"] == ["echo_mcp.py"]
+    assert added["env"]["MCP_TAG"] == "manual"
+
+    called = run_main_json(
+        [
+            "mcp",
+            "call",
+            "--name",
+            "echo-relaxed",
+            "--request-json",
+            "{id:manual-1,method:ping}",
+            "--json",
+        ]
+    )
+    assert called["response"]["ok"] is True
+    assert called["response"]["id"] == "manual-1"
+    assert called["response"]["method"] == "ping"

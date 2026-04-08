@@ -138,7 +138,11 @@ class SkillRuntime:
         return item.to_dict()
 
     def process_background_tasks(self, *, max_items: int | None = None) -> list[dict[str, Any]]:
-        return self.delivery_queue.process_all({"background_task": self._handle_background_task}, max_items=max_items)
+        return self.delivery_queue.process_all_for_kinds(
+            {"background_task": self._handle_background_task},
+            allowed_kinds={"background_task"},
+            max_items=max_items,
+        )
 
     def background_status(self) -> dict[str, Any]:
         return self.delivery_queue.status()

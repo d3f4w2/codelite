@@ -200,8 +200,9 @@ class AgentTeamRuntime:
         }
 
     def process_subagents(self, *, max_items: int | None = None) -> list[dict[str, Any]]:
-        processed = self.delivery_queue.process_all(
+        processed = self.delivery_queue.process_all_for_kinds(
             {"subagent_task": self._handle_subagent_task},
+            allowed_kinds={"subagent_task"},
             max_items=max_items,
         )
         normalized: list[dict[str, Any]] = []
