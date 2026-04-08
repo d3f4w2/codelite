@@ -12,6 +12,8 @@ class MemoryPolicy:
             "retrieval",
             "skill",
             "background",
+            "subagent",
+            "mcp",
             "failure",
             "review",
         }

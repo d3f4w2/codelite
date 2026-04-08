@@ -108,6 +108,33 @@ def test_task_store_reconciles_expired_leases(workspace_dir: Path) -> None:
     assert not store.lease_path("demo-task").exists()
 
 
+def test_task_store_retries_transient_replace_failures(
+    workspace_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = build_store(workspace_dir)
+    task_path = store.task_path("demo-task")
+    path_type = type(task_path)
+    original_replace = path_type.replace
+    state = {"attempts": 0}
+
+    def flaky_replace(self: Path, target: Path) -> Path:
+        if Path(target) == task_path and self == task_path.with_suffix(task_path.suffix + ".tmp") and state["attempts"] == 0:
+            state["attempts"] += 1
+            raise PermissionError(5, "Access is denied")
+        return original_replace(self, target)
+
+    monkeypatch.setattr(path_type, "replace", flaky_replace)
+
+    lease = store.acquire_lease("demo-task", owner="agent/a")
+
+    assert state["attempts"] == 1
+    task = store.get_task("demo-task")
+    assert task is not None
+    assert task.status is TaskStatus.LEASED
+    assert task.lease_id == lease.lease_id
+
+
 def test_task_store_rejects_invalid_transitions(workspace_dir: Path) -> None:
     store = build_store(workspace_dir)
     lease = store.acquire_lease("demo-task", owner="agent/a")

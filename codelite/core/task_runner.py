@@ -5,11 +5,13 @@ from pathlib import Path
 from typing import Any
 
 from codelite.config import AppConfig
+from codelite.core.agent_team import AgentTeamRuntime
 from codelite.core.context import ContextCompact
 from codelite.core.heartbeat import HeartService
 from codelite.core.llm import ModelClient
 from codelite.core.loop import AgentLoop
 from codelite.core.memory_runtime import MemoryRuntime
+from codelite.core.mcp_runtime import McpRuntime
 from codelite.core.model_router import ModelRouter
 from codelite.core.resilience import ResilienceRunner
 from codelite.core.retrieval import RetrievalRouter
@@ -57,6 +59,8 @@ class TaskRunner:
         model_router: ModelRouter | None = None,
         resilience_runner: ResilienceRunner | None = None,
         skill_runtime: SkillRuntime | None = None,
+        agent_team_runtime: AgentTeamRuntime | None = None,
+        mcp_runtime: McpRuntime | None = None,
         memory_runtime: MemoryRuntime | None = None,
         hook_runtime: HookRuntime | None = None,
     ) -> None:
@@ -73,6 +77,8 @@ class TaskRunner:
         self.model_router = model_router
         self.resilience_runner = resilience_runner
         self.skill_runtime = skill_runtime
+        self.agent_team_runtime = agent_team_runtime
+        self.mcp_runtime = mcp_runtime
         self.memory_runtime = memory_runtime
         self.hook_runtime = hook_runtime
 
@@ -117,6 +123,9 @@ class TaskRunner:
                 todo_manager=self.todo_manager,
                 heart_service=self.heart_service,
                 hook_runtime=self.hook_runtime,
+                skill_runtime=self.skill_runtime,
+                agent_team_runtime=self.agent_team_runtime,
+                mcp_runtime=self.mcp_runtime,
             )
             loop = AgentLoop(
                 config=self.config,

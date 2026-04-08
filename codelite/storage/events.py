@@ -140,6 +140,34 @@ class RuntimeLayout:
     def critic_rules_path(self) -> Path:
         return self.critic_dir / "rules.json"
 
+    @property
+    def agent_team_dir(self) -> Path:
+        return self.runtime_dir / "agent-team"
+
+    @property
+    def agent_team_teams_dir(self) -> Path:
+        return self.agent_team_dir / "teams"
+
+    @property
+    def agent_team_subagents_dir(self) -> Path:
+        return self.agent_team_dir / "subagents"
+
+    @property
+    def agent_team_results_dir(self) -> Path:
+        return self.agent_team_dir / "results"
+
+    @property
+    def mcp_dir(self) -> Path:
+        return self.runtime_dir / "mcp"
+
+    @property
+    def mcp_servers_path(self) -> Path:
+        return self.mcp_dir / "servers.json"
+
+    @property
+    def mcp_invocations_dir(self) -> Path:
+        return self.mcp_dir / "invocations"
+
     def ensure(self) -> None:
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
@@ -164,6 +192,12 @@ class RuntimeLayout:
         self.background_dir.mkdir(parents=True, exist_ok=True)
         self.background_results_dir.mkdir(parents=True, exist_ok=True)
         self.critic_dir.mkdir(parents=True, exist_ok=True)
+        self.agent_team_dir.mkdir(parents=True, exist_ok=True)
+        self.agent_team_teams_dir.mkdir(parents=True, exist_ok=True)
+        self.agent_team_subagents_dir.mkdir(parents=True, exist_ok=True)
+        self.agent_team_results_dir.mkdir(parents=True, exist_ok=True)
+        self.mcp_dir.mkdir(parents=True, exist_ok=True)
+        self.mcp_invocations_dir.mkdir(parents=True, exist_ok=True)
 
 
 class EventStore:

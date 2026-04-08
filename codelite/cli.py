@@ -12,6 +12,7 @@ from typing import Any, Callable
 
 from codelite import __version__
 from codelite.config import AppConfig, load_app_config
+from codelite.core.agent_team import AgentTeamRuntime
 from codelite.core.context import ContextCompact
 from codelite.core.delivery import DeliveryQueue
 from codelite.core.events import EventBus
@@ -20,6 +21,7 @@ from codelite.core.lanes import LaneScheduler
 from codelite.core.llm import ModelClient
 from codelite.core.loop import AgentLoop
 from codelite.core.memory_runtime import MemoryRuntime
+from codelite.core.mcp_runtime import McpRuntime
 from codelite.core.model_router import CriticRefiner, ModelRouter
 from codelite.core.reconcile import Reconciler
 from codelite.core.resilience import ResilienceRunner
@@ -71,6 +73,8 @@ class RuntimeServices:
     lane_scheduler: LaneScheduler
     delivery_queue: DeliveryQueue
     skill_runtime: SkillRuntime
+    agent_team_runtime: AgentTeamRuntime
+    mcp_runtime: McpRuntime
     retrieval_router: RetrievalRouter
     memory_runtime: MemoryRuntime
     model_router: ModelRouter
@@ -115,6 +119,17 @@ def build_runtime(
         memory_runtime=memory_runtime,
         nag_after_steps=config.runtime.todo_nag_after_steps,
     )
+    agent_team_runtime = AgentTeamRuntime(
+        layout=layout,
+        delivery_queue=delivery_queue,
+        memory_runtime=memory_runtime,
+    )
+    mcp_runtime = McpRuntime(
+        workspace_root=root,
+        layout=layout,
+        memory_runtime=memory_runtime,
+        default_timeout_sec=config.runtime.shell_timeout_sec,
+    )
     model_router = ModelRouter(
         layout,
         config.llm,
@@ -146,6 +161,9 @@ def build_runtime(
         todo_manager=todo_manager,
         heart_service=heart_service,
         hook_runtime=hook_runtime,
+        skill_runtime=skill_runtime,
+        agent_team_runtime=agent_team_runtime,
+        mcp_runtime=mcp_runtime,
     )
     agent_loop = AgentLoop(
         config=config,
@@ -161,6 +179,23 @@ def build_runtime(
         skill_runtime=skill_runtime,
         memory_runtime=memory_runtime,
     )
+    def _subagent_executor(
+        prompt: str,
+        parent_session_id: str | None,
+        team_id: str,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        subagent_session_id = session_store.new_session_id()
+        answer = agent_loop.run_turn(session_id=subagent_session_id, user_input=prompt)
+        return {
+            "team_id": team_id,
+            "parent_session_id": parent_session_id,
+            "metadata": dict(metadata),
+            "session_id": subagent_session_id,
+            "answer": answer,
+        }
+
+    agent_team_runtime.set_executor(_subagent_executor)
     reconciler = Reconciler(
         layout=layout,
         session_store=session_store,
@@ -225,6 +260,8 @@ def build_runtime(
     heart_service.beat("retrieval_router")
     heart_service.beat("model_router")
     heart_service.beat("skill_runtime")
+    heart_service.beat("agent_team_runtime")
+    heart_service.beat("mcp_runtime")
     if worktree_manager is not None:
         heart_service.beat("worktree_manager")
 
@@ -242,6 +279,8 @@ def build_runtime(
         lane_scheduler=lane_scheduler,
         delivery_queue=delivery_queue,
         skill_runtime=skill_runtime,
+        agent_team_runtime=agent_team_runtime,
+        mcp_runtime=mcp_runtime,
         retrieval_router=retrieval_router,
         memory_runtime=memory_runtime,
         model_router=model_router,
@@ -294,6 +333,9 @@ def build_health_snapshot(services: RuntimeServices) -> dict[str, Any]:
         "lane_count": len(services.lane_scheduler.status()["lanes"]),
         "delivery_pending_count": len(list(services.layout.delivery_pending_dir.glob("*.json"))),
         "delivery_failed_count": len(list(services.layout.delivery_failed_dir.glob("*.json"))),
+        "agent_team_count": len(services.agent_team_runtime.list_teams()),
+        "subagent_count": len(services.agent_team_runtime.list_subagents(limit=10000)),
+        "mcp_server_count": len(services.mcp_runtime.list_servers()),
         "memory_entry_count": _count_lines(services.layout.memory_ledger_path),
         "hearts_path": str(services.layout.hearts_path),
         "heart_status_summary": heart_summary,
@@ -514,6 +556,8 @@ def cmd_task_run(args: argparse.Namespace) -> int:
         model_router=services.model_router,
         resilience_runner=services.resilience_runner,
         skill_runtime=services.skill_runtime,
+        agent_team_runtime=services.agent_team_runtime,
+        mcp_runtime=services.mcp_runtime,
         memory_runtime=services.memory_runtime,
         hook_runtime=services.hook_runtime,
     )
@@ -717,6 +761,7 @@ def _delivery_handlers(services: RuntimeServices) -> dict[str, Callable[[dict[st
 
     return {
         "background_task": services.skill_runtime._handle_background_task,
+        "subagent_task": services.agent_team_runtime._handle_subagent_task,
         "demo_echo": demo_echo,
         "always_fail": always_fail,
     }
@@ -835,6 +880,168 @@ def cmd_hooks_doctor(args: argparse.Namespace) -> int:
 def cmd_skills_load(args: argparse.Namespace) -> int:
     services = build_runtime()
     payload = services.skill_runtime.load_skill(args.name).to_dict()
+    if args.json:
+        _print_json(payload)
+        return 0
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_skills_list(args: argparse.Namespace) -> int:
+    services = build_runtime()
+    payload = services.skill_runtime.list_skills()
+    query = (args.query or "").strip().lower()
+    if query:
+        payload = [
+            item
+            for item in payload
+            if query in str(item.get("name", "")).lower()
+            or query in str(item.get("summary", "")).lower()
+        ]
+    payload = payload[: max(args.limit, 1)]
+    if args.json:
+        _print_json(payload)
+        return 0
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_team_create(args: argparse.Namespace) -> int:
+    services = build_runtime()
+    payload = services.agent_team_runtime.create_team(
+        name=args.name,
+        strategy=args.strategy,
+        max_subagents=args.max_subagents,
+        metadata=json.loads(args.metadata_json) if args.metadata_json else {},
+    ).to_dict()
+    if args.json:
+        _print_json(payload)
+        return 0
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_team_list(args: argparse.Namespace) -> int:
+    services = build_runtime()
+    payload = [item.to_dict() for item in services.agent_team_runtime.list_teams()]
+    if args.json:
+        _print_json(payload)
+        return 0
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_subagent_spawn(args: argparse.Namespace) -> int:
+    services = build_runtime(model_client=getattr(args, "_model_client", None))
+    metadata = json.loads(args.metadata_json) if args.metadata_json else {}
+    if args.mode == "sync":
+        payload = services.agent_team_runtime.run_subagent_inline(
+            team_id=args.team_id,
+            prompt=args.prompt,
+            parent_session_id=args.session_id,
+            metadata=metadata,
+        )
+    else:
+        payload = services.agent_team_runtime.spawn_subagent(
+            team_id=args.team_id,
+            prompt=args.prompt,
+            parent_session_id=args.session_id,
+            metadata=metadata,
+            max_attempts=args.max_attempts,
+        )
+    if args.json:
+        _print_json(payload)
+        return 0
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_subagent_process(args: argparse.Namespace) -> int:
+    services = build_runtime(model_client=getattr(args, "_model_client", None))
+    payload = services.agent_team_runtime.process_subagents(max_items=args.max_items)
+    if args.json:
+        _print_json(payload)
+        return 0
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_subagent_list(args: argparse.Namespace) -> int:
+    services = build_runtime()
+    payload = [
+        item.to_dict()
+        for item in services.agent_team_runtime.list_subagents(
+            team_id=args.team_id,
+            status=args.status,
+            limit=args.limit,
+        )
+    ]
+    if args.json:
+        _print_json(payload)
+        return 0
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_subagent_show(args: argparse.Namespace) -> int:
+    services = build_runtime()
+    record = services.agent_team_runtime.get_subagent(args.subagent_id)
+    if record is None:
+        print(f"Subagent not found: {args.subagent_id}")
+        return 1
+    payload = record.to_dict()
+    if args.json:
+        _print_json(payload)
+        return 0
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_mcp_add(args: argparse.Namespace) -> int:
+    services = build_runtime()
+    payload = services.mcp_runtime.add_server(
+        name=args.name,
+        command=args.server_command,
+        args=json.loads(args.args_json) if args.args_json else [],
+        env=json.loads(args.env_json) if args.env_json else {},
+        cwd=args.cwd or "",
+        description=args.description or "",
+        enabled=not args.disabled,
+    )
+    if args.json:
+        _print_json(payload)
+        return 0
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_mcp_list(args: argparse.Namespace) -> int:
+    services = build_runtime()
+    payload = services.mcp_runtime.list_servers()
+    if args.json:
+        _print_json(payload)
+        return 0
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_mcp_remove(args: argparse.Namespace) -> int:
+    services = build_runtime()
+    payload = services.mcp_runtime.remove_server(args.name)
+    if args.json:
+        _print_json(payload)
+        return 0
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_mcp_call(args: argparse.Namespace) -> int:
+    services = build_runtime()
+    payload = services.mcp_runtime.call(
+        name=args.name,
+        request=json.loads(args.request_json),
+        timeout_sec=args.timeout_sec,
+    )
     if args.json:
         _print_json(payload)
         return 0
@@ -1236,9 +1443,68 @@ def _build_parser() -> argparse.ArgumentParser:
 
     skills = sub.add_parser("skills", help="skill runtime operations")
     skills_sub = skills.add_subparsers(dest="skills_command")
-    skills_load = skills_sub.add_parser("load", help="load one built-in skill")
-    skills_load.add_argument("--name", required=True, help="skill name")
+    skills_list = skills_sub.add_parser("list", help="list available skills")
+    skills_list.add_argument("--query", default="", help="optional name/summary filter")
+    skills_list.add_argument("--limit", type=int, default=50, help="maximum skills to return")
+    skills_list.add_argument("--json", action="store_true", help="print JSON")
+    skills_load = skills_sub.add_parser("load", help="load one skill by name or directory path")
+    skills_load.add_argument("--name", required=True, help="skill name or skill directory path")
     skills_load.add_argument("--json", action="store_true", help="print JSON")
+
+    team = sub.add_parser("team", help="agent team operations")
+    team_sub = team.add_subparsers(dest="team_command")
+    team_create = team_sub.add_parser("create", help="create one agent team")
+    team_create.add_argument("--name", required=True, help="team name")
+    team_create.add_argument("--strategy", default="parallel", help="team strategy")
+    team_create.add_argument("--max-subagents", type=int, default=3, help="max subagents for this team")
+    team_create.add_argument("--metadata-json", help="optional metadata JSON")
+    team_create.add_argument("--json", action="store_true", help="print JSON")
+    team_list = team_sub.add_parser("list", help="list agent teams")
+    team_list.add_argument("--json", action="store_true", help="print JSON")
+
+    subagent = sub.add_parser("subagent", help="subagent operations")
+    subagent_sub = subagent.add_subparsers(dest="subagent_command")
+    subagent_spawn = subagent_sub.add_parser("spawn", help="spawn one subagent")
+    subagent_spawn.add_argument("--team-id", required=True, help="team id")
+    subagent_spawn.add_argument("--prompt", required=True, help="subagent prompt")
+    subagent_spawn.add_argument("--session-id", help="optional parent session id")
+    subagent_spawn.add_argument("--mode", choices=["queue", "sync"], default="queue", help="run mode")
+    subagent_spawn.add_argument("--max-attempts", type=int, help="queue max attempts when mode=queue")
+    subagent_spawn.add_argument("--metadata-json", help="optional metadata JSON")
+    subagent_spawn.add_argument("--json", action="store_true", help="print JSON")
+    subagent_process = subagent_sub.add_parser("process", help="process queued subagents")
+    subagent_process.add_argument("--max-items", type=int, default=20)
+    subagent_process.add_argument("--json", action="store_true", help="print JSON")
+    subagent_list = subagent_sub.add_parser("list", help="list subagents")
+    subagent_list.add_argument("--team-id", help="filter by team id")
+    subagent_list.add_argument("--status", help="filter by status")
+    subagent_list.add_argument("--limit", type=int, default=50)
+    subagent_list.add_argument("--json", action="store_true", help="print JSON")
+    subagent_show = subagent_sub.add_parser("show", help="show one subagent")
+    subagent_show.add_argument("--subagent-id", required=True, help="subagent id")
+    subagent_show.add_argument("--json", action="store_true", help="print JSON")
+
+    mcp = sub.add_parser("mcp", help="MCP registry and invocation operations")
+    mcp_sub = mcp.add_subparsers(dest="mcp_command")
+    mcp_add = mcp_sub.add_parser("add", help="register or update one MCP server")
+    mcp_add.add_argument("--name", required=True, help="server name")
+    mcp_add.add_argument("--command", dest="server_command", required=True, help="server command")
+    mcp_add.add_argument("--args-json", help='optional JSON array of command args, e.g. ["-m","server"]')
+    mcp_add.add_argument("--env-json", help='optional JSON object of env vars, e.g. {"TOKEN":"x"}')
+    mcp_add.add_argument("--cwd", help="optional cwd (must stay inside workspace)")
+    mcp_add.add_argument("--description", help="optional description")
+    mcp_add.add_argument("--disabled", action="store_true", help="register as disabled")
+    mcp_add.add_argument("--json", action="store_true", help="print JSON")
+    mcp_list = mcp_sub.add_parser("list", help="list MCP servers")
+    mcp_list.add_argument("--json", action="store_true", help="print JSON")
+    mcp_remove = mcp_sub.add_parser("remove", help="remove one MCP server")
+    mcp_remove.add_argument("--name", required=True, help="server name")
+    mcp_remove.add_argument("--json", action="store_true", help="print JSON")
+    mcp_call = mcp_sub.add_parser("call", help="call one MCP server with JSON request")
+    mcp_call.add_argument("--name", required=True, help="server name")
+    mcp_call.add_argument("--request-json", required=True, help="request JSON payload")
+    mcp_call.add_argument("--timeout-sec", type=int, default=60, help="timeout seconds")
+    mcp_call.add_argument("--json", action="store_true", help="print JSON")
 
     background = sub.add_parser("background", help="background task operations")
     background_sub = background.add_subparsers(dest="background_command")
@@ -1398,8 +1664,41 @@ def main(
     if args.command == "hooks" and args.hooks_command == "doctor":
         return cmd_hooks_doctor(args)
 
+    if args.command == "skills" and args.skills_command == "list":
+        return cmd_skills_list(args)
+
     if args.command == "skills" and args.skills_command == "load":
         return cmd_skills_load(args)
+
+    if args.command == "team" and args.team_command == "create":
+        return cmd_team_create(args)
+
+    if args.command == "team" and args.team_command == "list":
+        return cmd_team_list(args)
+
+    if args.command == "subagent" and args.subagent_command == "spawn":
+        return cmd_subagent_spawn(args)
+
+    if args.command == "subagent" and args.subagent_command == "process":
+        return cmd_subagent_process(args)
+
+    if args.command == "subagent" and args.subagent_command == "list":
+        return cmd_subagent_list(args)
+
+    if args.command == "subagent" and args.subagent_command == "show":
+        return cmd_subagent_show(args)
+
+    if args.command == "mcp" and args.mcp_command == "add":
+        return cmd_mcp_add(args)
+
+    if args.command == "mcp" and args.mcp_command == "list":
+        return cmd_mcp_list(args)
+
+    if args.command == "mcp" and args.mcp_command == "remove":
+        return cmd_mcp_remove(args)
+
+    if args.command == "mcp" and args.mcp_command == "call":
+        return cmd_mcp_call(args)
 
     if args.command == "background" and args.background_command == "run":
         return cmd_background_run(args)

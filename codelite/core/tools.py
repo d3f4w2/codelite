@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from dataclasses import dataclass
@@ -7,8 +8,11 @@ from pathlib import Path
 from typing import Any
 
 from codelite.config import RuntimeConfig
+from codelite.core.agent_team import AgentTeamRuntime
 from codelite.core.heartbeat import HeartService
+from codelite.core.mcp_runtime import McpRuntime
 from codelite.core.policy import PolicyError, PolicyGate
+from codelite.core.skills_runtime import SkillRuntime
 from codelite.core.todo import TodoManager
 from codelite.hooks import HookRuntime
 
@@ -33,6 +37,9 @@ class ToolRouter:
         session_id: str | None = None,
         heart_service: HeartService | None = None,
         hook_runtime: HookRuntime | None = None,
+        skill_runtime: SkillRuntime | None = None,
+        agent_team_runtime: AgentTeamRuntime | None = None,
+        mcp_runtime: McpRuntime | None = None,
     ) -> None:
         self.workspace_root = workspace_root.resolve()
         self.runtime_config = runtime_config
@@ -41,6 +48,9 @@ class ToolRouter:
         self.session_id = session_id
         self.heart_service = heart_service
         self.hook_runtime = hook_runtime
+        self.skill_runtime = skill_runtime
+        self.agent_team_runtime = agent_team_runtime
+        self.mcp_runtime = mcp_runtime
 
     def for_session(self, session_id: str) -> ToolRouter:
         return ToolRouter(
@@ -50,6 +60,9 @@ class ToolRouter:
             session_id=session_id,
             heart_service=self.heart_service,
             hook_runtime=self.hook_runtime,
+            skill_runtime=self.skill_runtime,
+            agent_team_runtime=self.agent_team_runtime,
+            mcp_runtime=self.mcp_runtime,
         )
 
     def tool_schemas(self) -> list[dict[str, Any]]:
@@ -132,6 +145,81 @@ class ToolRouter:
                         }
                     },
                     "required": ["items"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "skills_list",
+                "description": "List available builtin and external skills.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "limit": {"type": "integer", "minimum": 1},
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "subagent_spawn",
+                "description": "Spawn a subagent for the specified team. mode=sync runs immediately; mode=queue enqueues.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "team_id": {"type": "string"},
+                        "prompt": {"type": "string"},
+                        "mode": {"type": "string", "enum": ["queue", "sync"]},
+                        "parent_session_id": {"type": "string"},
+                    },
+                    "required": ["team_id", "prompt"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "subagent_process",
+                "description": "Process queued subagent tasks.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "max_items": {"type": "integer", "minimum": 1},
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "subagent_status",
+                "description": "Show one or more subagent records.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "subagent_id": {"type": "string"},
+                        "team_id": {"type": "string"},
+                        "status": {"type": "string"},
+                        "limit": {"type": "integer", "minimum": 1},
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "mcp_list",
+                "description": "List configured MCP servers.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "mcp_call",
+                "description": "Call one configured MCP server with a JSON payload.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "server": {"type": "string"},
+                        "request": {"type": "object"},
+                        "timeout_sec": {"type": "integer", "minimum": 1},
+                    },
+                    "required": ["server", "request"],
                     "additionalProperties": False,
                 },
             },
@@ -239,6 +327,85 @@ class ToolRouter:
         for item in snapshot.items:
             counts[item.status.value] = counts.get(item.status.value, 0) + 1
         return f"Updated {len(snapshot.items)} todo items: {counts}"
+
+    def _tool_skills_list(self, query: str = "", limit: int = 20) -> str:
+        if self.skill_runtime is None:
+            raise ToolError("skills runtime unavailable")
+        entries = self.skill_runtime.list_skills()
+        normalized = query.strip().lower()
+        if normalized:
+            entries = [
+                item
+                for item in entries
+                if normalized in item.get("name", "").lower()
+                or normalized in item.get("summary", "").lower()
+            ]
+        return self._truncate(json.dumps(entries[: max(limit, 1)], ensure_ascii=False, indent=2))
+
+    def _tool_subagent_spawn(
+        self,
+        team_id: str,
+        prompt: str,
+        mode: str = "queue",
+        parent_session_id: str = "",
+    ) -> str:
+        if self.agent_team_runtime is None:
+            raise ToolError("agent team runtime unavailable")
+        parent_id = parent_session_id.strip() or self.session_id
+        if mode == "sync":
+            payload = self.agent_team_runtime.run_subagent_inline(
+                team_id=team_id,
+                prompt=prompt,
+                parent_session_id=parent_id,
+            )
+        else:
+            payload = self.agent_team_runtime.spawn_subagent(
+                team_id=team_id,
+                prompt=prompt,
+                parent_session_id=parent_id,
+            )
+        return self._truncate(json.dumps(payload, ensure_ascii=False, indent=2))
+
+    def _tool_subagent_process(self, max_items: int = 20) -> str:
+        if self.agent_team_runtime is None:
+            raise ToolError("agent team runtime unavailable")
+        payload = self.agent_team_runtime.process_subagents(max_items=max_items)
+        return self._truncate(json.dumps(payload, ensure_ascii=False, indent=2))
+
+    def _tool_subagent_status(
+        self,
+        subagent_id: str = "",
+        team_id: str = "",
+        status: str = "",
+        limit: int = 20,
+    ) -> str:
+        if self.agent_team_runtime is None:
+            raise ToolError("agent team runtime unavailable")
+        if subagent_id.strip():
+            record = self.agent_team_runtime.get_subagent(subagent_id.strip())
+            payload: dict[str, Any] | list[dict[str, Any]] = (
+                record.to_dict() if record is not None else {"error": f"unknown subagent_id `{subagent_id}`"}
+            )
+            return self._truncate(json.dumps(payload, ensure_ascii=False, indent=2))
+        records = self.agent_team_runtime.list_subagents(
+            team_id=team_id.strip() or None,
+            status=status.strip() or None,
+            limit=limit,
+        )
+        payload = [record.to_dict() for record in records]
+        return self._truncate(json.dumps(payload, ensure_ascii=False, indent=2))
+
+    def _tool_mcp_list(self) -> str:
+        if self.mcp_runtime is None:
+            raise ToolError("mcp runtime unavailable")
+        payload = self.mcp_runtime.list_servers()
+        return self._truncate(json.dumps(payload, ensure_ascii=False, indent=2))
+
+    def _tool_mcp_call(self, server: str, request: dict[str, Any], timeout_sec: int = 60) -> str:
+        if self.mcp_runtime is None:
+            raise ToolError("mcp runtime unavailable")
+        payload = self.mcp_runtime.call(name=server, request=request, timeout_sec=timeout_sec)
+        return self._truncate(json.dumps(payload, ensure_ascii=False, indent=2))
 
     def _shell_argv(self, command: str) -> list[str]:
         if os.name == "nt":

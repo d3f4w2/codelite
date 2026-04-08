@@ -44,6 +44,11 @@ Each stage should use this layout:
 - [2026-04-08-final-project-complete-state/README.md](c:/Users/24719/Desktop/codelite/docs/acceptance/2026-04-08-final-project-complete-state/README.md)
   The final closure bundle for the whole project, covering all completed capabilities from `v0.0` through `v0.2.1`, with fresh command outputs and runtime snapshots.
 
+### v0.2.2 Agent Team + MCP + Skills Compatibility
+
+- [2026-04-08-v022-agent-team-mcp-skills/README.md](c:/Users/24719/Desktop/codelite/docs/acceptance/2026-04-08-v022-agent-team-mcp-skills/README.md)
+  Covers the newly added `v0.2.2` capabilities: agent teams, subagents, external skill compatibility ("drop-in" SKILL.md), MCP entrypoint, and tool-surface integration.
+
 ## Workflow For Future Stages
 
 1. Create a new bundle directory.
