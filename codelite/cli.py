@@ -37,6 +37,7 @@ from codelite.memory import MemoryLedger, MemoryPolicy, MemoryViews
 from codelite.storage.events import EventStore, RuntimeLayout
 from codelite.storage.sessions import SessionStore
 from codelite.storage.tasks import TaskStore
+from codelite.tui import ShellRenderer, ShellWelcomeData
 
 
 def _configure_stdio() -> None:
@@ -989,14 +990,13 @@ class CodeLiteShell:
         self.session_id = session_id or services.session_store.new_session_id()
         self.services.session_store.ensure_session(self.session_id)
         self._running = True
+        self.renderer = ShellRenderer()
 
     def run(self) -> int:
-        print(f"CodeLite v{__version__}")
-        print(f"session: {self.session_id}")
-        print("Type a task to send it to the agent. Use `help` for local commands, or `exit` to leave.")
+        print(self.renderer.render_welcome(self._welcome_data()))
         while self._running:
             try:
-                raw = input("codelite> ").strip()
+                raw = input(self.renderer.prompt()).strip()
             except (EOFError, KeyboardInterrupt):
                 print()
                 break
@@ -1047,14 +1047,65 @@ class CodeLiteShell:
         return False
 
     @staticmethod
-    def _print_help() -> None:
-        print("local commands:")
-        print("  help            show help")
-        print("  version         show version")
-        print("  health          show runtime health")
-        print("  session id      show current session id")
-        print("  session replay  replay the latest session")
-        print("  exit            quit")
+    def _command_help_lines() -> list[str]:
+        return [
+            "help            show help",
+            "version         show version",
+            "health          show runtime health",
+            "session id      show current session id",
+            "session replay  replay the latest session",
+            "exit            quit",
+        ]
+
+    def _print_help(self) -> None:
+        print(self.renderer.render_help(self._command_help_lines()))
+
+    def _welcome_data(self) -> ShellWelcomeData:
+        snapshot = build_health_snapshot(self.services)
+        return ShellWelcomeData(
+            version=__version__,
+            session_id=self.session_id,
+            model_name=str(snapshot["llm"]["model"]),
+            provider=str(snapshot["llm"]["provider"]),
+            workspace_root=str(snapshot["workspace_root"]),
+            current_dir=str(snapshot["cwd"]),
+            health_summary=self._health_summary(snapshot.get("heart_status_summary", {})),
+            recent_activity=self._recent_activity_lines(limit=3),
+            tips=[
+                "help               list local commands",
+                "health             inspect runtime health",
+                "session replay     inspect the latest session",
+            ],
+        )
+
+    def _recent_activity_lines(self, *, limit: int) -> list[str]:
+        events = self.services.session_store.replay(self.session_id)
+        preview = self._session_preview(events)
+        if preview is None:
+            return ["No recent activity"]
+        return [preview[:58]]
+
+    @staticmethod
+    def _session_preview(events: list[dict[str, Any]]) -> str | None:
+        for event in reversed(events):
+            if event.get("event_type") == "turn_finished":
+                payload = event.get("payload") or {}
+                preview = str(payload.get("answer_preview", "")).strip()
+                if preview:
+                    return preview[:58]
+            if event.get("event_type") == "message":
+                payload = event.get("payload") or {}
+                if payload.get("role") == "assistant":
+                    content = str(payload.get("content", "")).strip()
+                    if content:
+                        return content[:58]
+        return None
+
+    @staticmethod
+    def _health_summary(summary: dict[str, Any]) -> str:
+        order = ("green", "yellow", "red", "unknown")
+        parts = [f"{name}={summary.get(name, 0)}" for name in order if summary.get(name, 0)]
+        return " | ".join(parts) if parts else "No health data yet"
 
 
 def _build_parser() -> argparse.ArgumentParser:
