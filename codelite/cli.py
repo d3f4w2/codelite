@@ -13,17 +13,27 @@ from typing import Any, Callable
 from codelite import __version__
 from codelite.config import AppConfig, load_app_config
 from codelite.core.context import ContextCompact
+from codelite.core.delivery import DeliveryQueue
 from codelite.core.events import EventBus
 from codelite.core.heartbeat import HeartService
+from codelite.core.lanes import LaneScheduler
 from codelite.core.llm import ModelClient
 from codelite.core.loop import AgentLoop
+from codelite.core.memory_runtime import MemoryRuntime
+from codelite.core.model_router import CriticRefiner, ModelRouter
 from codelite.core.reconcile import Reconciler
+from codelite.core.resilience import ResilienceRunner
+from codelite.core.retrieval import RetrievalRouter
 from codelite.core.scheduler import CronScheduler
+from codelite.core.skills_runtime import SkillRuntime
 from codelite.core.task_runner import TaskRunner
 from codelite.core.todo import TodoManager
 from codelite.core.tools import ToolRouter
+from codelite.core.validate_pipeline import ValidatePipeline
 from codelite.core.watchdog import Watchdog
 from codelite.core.worktree import WorktreeError, WorktreeManager
+from codelite.hooks import HookRuntime
+from codelite.memory import MemoryLedger, MemoryPolicy, MemoryViews
 from codelite.storage.events import EventStore, RuntimeLayout
 from codelite.storage.sessions import SessionStore
 from codelite.storage.tasks import TaskStore
@@ -56,10 +66,20 @@ class RuntimeServices:
     todo_manager: TodoManager
     context_manager: ContextCompact
     heart_service: HeartService
+    hook_runtime: HookRuntime
+    lane_scheduler: LaneScheduler
+    delivery_queue: DeliveryQueue
+    skill_runtime: SkillRuntime
+    retrieval_router: RetrievalRouter
+    memory_runtime: MemoryRuntime
+    model_router: ModelRouter
+    resilience_runner: ResilienceRunner
+    critic_refiner: CriticRefiner
     tool_router: ToolRouter
     worktree_manager: WorktreeManager | None
     reconciler: Reconciler
     cron_scheduler: CronScheduler
+    validate_pipeline: ValidatePipeline
     watchdog: Watchdog
     agent_loop: AgentLoop
 
@@ -78,6 +98,42 @@ def build_runtime(
     todo_manager = TodoManager(layout, event_bus)
     context_manager = ContextCompact(layout, config.runtime, event_bus)
     heart_service = HeartService(layout, config.runtime, event_bus)
+    hook_runtime = HookRuntime(root, layout)
+    lane_scheduler = LaneScheduler(layout, event_bus)
+    memory_runtime = MemoryRuntime(
+        MemoryLedger(layout),
+        MemoryViews(layout),
+        MemoryPolicy(),
+    )
+    delivery_queue = DeliveryQueue(layout, config.runtime, event_bus)
+    skill_runtime = SkillRuntime(
+        layout=layout,
+        session_store=session_store,
+        todo_manager=todo_manager,
+        delivery_queue=delivery_queue,
+        memory_runtime=memory_runtime,
+        nag_after_steps=config.runtime.todo_nag_after_steps,
+    )
+    model_router = ModelRouter(
+        layout,
+        config.llm,
+        primary_client=model_client,
+        memory_runtime=memory_runtime,
+    )
+    resilience_runner = ResilienceRunner(
+        context_manager=context_manager,
+        model_router=model_router,
+    )
+    retrieval_router = RetrievalRouter(
+        root,
+        layout,
+        config.runtime,
+        memory_runtime=memory_runtime,
+    )
+    critic_refiner = CriticRefiner(
+        layout,
+        memory_runtime=memory_runtime,
+    )
     try:
         worktree_manager = WorktreeManager(root)
     except WorktreeError:
@@ -88,6 +144,7 @@ def build_runtime(
         config.runtime,
         todo_manager=todo_manager,
         heart_service=heart_service,
+        hook_runtime=hook_runtime,
     )
     agent_loop = AgentLoop(
         config=config,
@@ -97,6 +154,11 @@ def build_runtime(
         todo_manager=todo_manager,
         context_manager=context_manager,
         heart_service=heart_service,
+        retrieval_router=retrieval_router,
+        model_router=model_router,
+        resilience_runner=resilience_runner,
+        skill_runtime=skill_runtime,
+        memory_runtime=memory_runtime,
     )
     reconciler = Reconciler(
         layout=layout,
@@ -125,6 +187,12 @@ def build_runtime(
         lambda: {"expired_task_ids": reconciler.reconcile_expired_leases()},
     )
     cron_scheduler.register(
+        "worktree_gc",
+        "*/10 * * * *",
+        "Clean orphaned managed worktree index records.",
+        lambda: {"cleaned_orphan_worktrees": reconciler.cleanup_orphan_worktrees()},
+    )
+    cron_scheduler.register(
         "compact_maintenance",
         "*/15 * * * *",
         "Create context snapshots for sessions that exceed the compaction threshold.",
@@ -142,11 +210,20 @@ def build_runtime(
         reconciler=reconciler,
         event_bus=event_bus,
     )
+    validate_pipeline = ValidatePipeline(
+        root,
+        hook_runtime=hook_runtime,
+    )
 
     heart_service.beat("event_bus")
     heart_service.beat("todo_manager")
     heart_service.beat("context_compact")
     heart_service.beat("cron_scheduler", queue_depth=len(cron_scheduler.jobs))
+    heart_service.beat("lane_scheduler", queue_depth=len(lane_scheduler.status()["lanes"]))
+    heart_service.beat("delivery_queue")
+    heart_service.beat("retrieval_router")
+    heart_service.beat("model_router")
+    heart_service.beat("skill_runtime")
     if worktree_manager is not None:
         heart_service.beat("worktree_manager")
 
@@ -160,10 +237,20 @@ def build_runtime(
         todo_manager=todo_manager,
         context_manager=context_manager,
         heart_service=heart_service,
+        hook_runtime=hook_runtime,
+        lane_scheduler=lane_scheduler,
+        delivery_queue=delivery_queue,
+        skill_runtime=skill_runtime,
+        retrieval_router=retrieval_router,
+        memory_runtime=memory_runtime,
+        model_router=model_router,
+        resilience_runner=resilience_runner,
+        critic_refiner=critic_refiner,
         tool_router=tool_router,
         worktree_manager=worktree_manager,
         reconciler=reconciler,
         cron_scheduler=cron_scheduler,
+        validate_pipeline=validate_pipeline,
         watchdog=watchdog,
         agent_loop=agent_loop,
     )
@@ -203,6 +290,10 @@ def build_health_snapshot(services: RuntimeServices) -> dict[str, Any]:
         "todo_snapshot_count": len(list(services.layout.todos_dir.glob("*.json"))),
         "context_snapshot_count": len(list(services.layout.context_dir.glob("*.json"))),
         "cron_job_count": len(services.cron_scheduler.jobs),
+        "lane_count": len(services.lane_scheduler.status()["lanes"]),
+        "delivery_pending_count": len(list(services.layout.delivery_pending_dir.glob("*.json"))),
+        "delivery_failed_count": len(list(services.layout.delivery_failed_dir.glob("*.json"))),
+        "memory_entry_count": _count_lines(services.layout.memory_ledger_path),
         "hearts_path": str(services.layout.hearts_path),
         "heart_status_summary": heart_summary,
         "last_session_id": latest[0] if latest else None,
@@ -418,23 +509,36 @@ def cmd_task_run(args: argparse.Namespace) -> int:
         todo_manager=services.todo_manager,
         context_manager=services.context_manager,
         heart_service=services.heart_service,
+        retrieval_router=services.retrieval_router,
+        model_router=services.model_router,
+        resilience_runner=services.resilience_runner,
+        skill_runtime=services.skill_runtime,
+        memory_runtime=services.memory_runtime,
+        hook_runtime=services.hook_runtime,
     )
-    result = runner.run(
-        task_id=args.task_id,
-        prompt=prompt,
-        title=args.title or args.task_id,
-        session_id=args.session_id,
+    lane_payload = services.lane_scheduler.execute_sync(
+        "main",
+        job_id=f"task:{args.task_id}",
+        payload={"task_id": args.task_id},
+        callback=lambda: runner.run(
+            task_id=args.task_id,
+            prompt=prompt,
+            title=args.title or args.task_id,
+            session_id=args.session_id,
+        ).to_dict(),
     )
+    result_payload = lane_payload["result"]
+    result = result_payload
 
     if args.json:
-        _print_json(result.to_dict())
+        _print_json(result)
         return 0
 
-    print(f"task_id: {result.task.task_id}")
-    print(f"status: {result.task.status}")
-    print(f"session_id: {result.session_id}")
-    print(f"worktree: {result.worktree.path}")
-    print(f"answer: {result.answer}")
+    print(f"task_id: {result['task']['task_id']}")
+    print(f"status: {result['task']['status']}")
+    print(f"session_id: {result['session_id']}")
+    print(f"worktree: {result['worktree']['path']}")
+    print(f"answer: {result['answer']}")
     return 0
 
 
@@ -492,7 +596,13 @@ def cmd_cron_list(args: argparse.Namespace) -> int:
 
 def cmd_cron_run(args: argparse.Namespace) -> int:
     services = build_runtime()
-    payload = services.cron_scheduler.run_job(args.job)
+    lane_payload = services.lane_scheduler.execute_sync(
+        "cron",
+        job_id=f"cron:{args.job}",
+        payload={"job": args.job},
+        callback=lambda: services.cron_scheduler.run_job(args.job),
+    )
+    payload = lane_payload["result"]
     if args.json:
         _print_json(payload)
         return 0
@@ -502,7 +612,13 @@ def cmd_cron_run(args: argparse.Namespace) -> int:
 
 def cmd_cron_tick(args: argparse.Namespace) -> int:
     services = build_runtime()
-    payload = services.cron_scheduler.run_due()
+    lane_payload = services.lane_scheduler.execute_sync(
+        "cron",
+        job_id="cron:tick",
+        payload={"job": "tick"},
+        callback=lambda: services.cron_scheduler.run_due(),
+    )
+    payload = lane_payload["result"]
     if args.json:
         _print_json(payload)
         return 0
@@ -584,6 +700,282 @@ def cmd_context_show(args: argparse.Namespace) -> int:
         print(f"Context snapshot not found for session: {session_id}")
         return 1
     payload = snapshot.to_dict()
+    if args.json:
+        _print_json(payload)
+        return 0
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def _delivery_handlers(services: RuntimeServices) -> dict[str, Callable[[dict[str, Any]], dict[str, Any] | str | None]]:
+    def demo_echo(payload: dict[str, Any]) -> dict[str, Any]:
+        return {"echo": payload}
+
+    def always_fail(payload: dict[str, Any]) -> dict[str, Any]:
+        raise RuntimeError(str(payload.get("message", "forced delivery failure")))
+
+    return {
+        "background_task": services.skill_runtime._handle_background_task,
+        "demo_echo": demo_echo,
+        "always_fail": always_fail,
+    }
+
+
+def cmd_lanes_status(args: argparse.Namespace) -> int:
+    services = build_runtime()
+    payload = services.lane_scheduler.status()
+    if args.json:
+        _print_json(payload)
+        return 0
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_lanes_bump(args: argparse.Namespace) -> int:
+    services = build_runtime()
+    payload = services.lane_scheduler.bump_generation(args.lane).to_dict()
+    if args.json:
+        _print_json(payload)
+        return 0
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_delivery_status(args: argparse.Namespace) -> int:
+    services = build_runtime()
+    payload = services.delivery_queue.status()
+    if args.json:
+        _print_json(payload)
+        return 0
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_delivery_enqueue(args: argparse.Namespace) -> int:
+    services = build_runtime()
+    payload = json.loads(args.payload_json)
+    item = services.delivery_queue.enqueue(args.kind, payload, max_attempts=args.max_attempts)
+    if args.json:
+        _print_json(item.to_dict())
+        return 0
+    print(json.dumps(item.to_dict(), ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_delivery_process(args: argparse.Namespace) -> int:
+    services = build_runtime()
+    payload = services.delivery_queue.process_all(_delivery_handlers(services), max_items=args.max_items)
+    if args.json:
+        _print_json(payload)
+        return 0
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_delivery_recover(args: argparse.Namespace) -> int:
+    services = build_runtime()
+    payload = {"recovered_delivery_ids": services.delivery_queue.recover_pending()}
+    if args.json:
+        _print_json(payload)
+        return 0
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_resilience_drill(args: argparse.Namespace) -> int:
+    from codelite.core.llm import ModelResult
+
+    class DrillClient:
+        def __init__(self, scenario: str) -> None:
+            self.scenario = scenario
+            self.calls = 0
+
+        def complete(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> ModelResult:
+            del messages, tools
+            self.calls += 1
+            if self.scenario == "overflow_then_fallback":
+                if self.calls == 1:
+                    raise RuntimeError("CONTEXT_OVERFLOW")
+                if self.calls in {2, 3}:
+                    raise RuntimeError("generic failure after compaction")
+                return ModelResult(text="resilience succeeded via fallback", tool_calls=[])
+            if self.scenario == "auth_then_retry":
+                if self.calls == 1:
+                    raise RuntimeError("AUTH_ERROR")
+                return ModelResult(text="resilience succeeded after auth rotation", tool_calls=[])
+            return ModelResult(text="resilience drill completed", tool_calls=[])
+
+    services = build_runtime(model_client=DrillClient(args.scenario))
+    result = services.resilience_runner.complete(
+        messages=[{"role": "system", "content": "drill"}],
+        tools=[],
+        preferred_profile="fast",
+        primary_client=services.agent_loop.model_client,
+        session_id=services.session_store.new_session_id(),
+    )
+    payload = result.to_dict()
+    if args.json:
+        _print_json(payload)
+        return 0
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_hooks_doctor(args: argparse.Namespace) -> int:
+    services = build_runtime()
+    payload = services.hook_runtime.doctor()
+    if args.json:
+        _print_json(payload)
+        return 0
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_skills_load(args: argparse.Namespace) -> int:
+    services = build_runtime()
+    payload = services.skill_runtime.load_skill(args.name).to_dict()
+    if args.json:
+        _print_json(payload)
+        return 0
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_background_run(args: argparse.Namespace) -> int:
+    services = build_runtime()
+    payload = services.skill_runtime.enqueue_background_task(
+        name=args.name,
+        payload=json.loads(args.payload_json),
+        session_id=args.session_id,
+    )
+    if args.json:
+        _print_json(payload)
+        return 0
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_background_process(args: argparse.Namespace) -> int:
+    services = build_runtime()
+    payload = services.skill_runtime.process_background_tasks(max_items=args.max_items)
+    if args.json:
+        _print_json(payload)
+        return 0
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_background_status(args: argparse.Namespace) -> int:
+    services = build_runtime()
+    payload = services.skill_runtime.background_status()
+    if args.json:
+        _print_json(payload)
+        return 0
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_retrieval_decide(args: argparse.Namespace) -> int:
+    services = build_runtime()
+    payload = services.retrieval_router.decide(args.prompt).to_dict()
+    if args.json:
+        _print_json(payload)
+        return 0
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_retrieval_run(args: argparse.Namespace) -> int:
+    services = build_runtime()
+    payload = services.retrieval_router.run(args.prompt)
+    if args.json:
+        _print_json(payload)
+        return 0
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_memory_timeline(args: argparse.Namespace) -> int:
+    services = build_runtime()
+    payload = services.memory_runtime.timeline()
+    if args.json:
+        _print_json(payload)
+        return 0
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_memory_keyword(args: argparse.Namespace) -> int:
+    services = build_runtime()
+    keywords = services.memory_runtime.keywords()
+    entry_ids = keywords.get("index", {}).get(args.keyword.lower(), [])
+    payload = {
+        "keyword": args.keyword.lower(),
+        "entry_ids": entry_ids,
+        "entries": [
+            services.memory_runtime.ledger.get(entry_id).to_dict()
+            for entry_id in entry_ids
+            if services.memory_runtime.ledger.get(entry_id) is not None
+        ],
+    }
+    if args.json:
+        _print_json(payload)
+        return 0
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_memory_trace(args: argparse.Namespace) -> int:
+    services = build_runtime()
+    entry = services.memory_runtime.ledger.get(args.entry_id)
+    if entry is None:
+        print(f"Memory entry not found: {args.entry_id}")
+        return 1
+    payload = entry.to_dict()
+    if args.json:
+        _print_json(payload)
+        return 0
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_model_route(args: argparse.Namespace) -> int:
+    services = build_runtime()
+    payload = services.model_router.select_profile(args.prompt).to_dict()
+    if args.json:
+        _print_json(payload)
+        return 0
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_critic_review(args: argparse.Namespace) -> int:
+    services = build_runtime()
+    payload = services.critic_refiner.review(prompt=args.prompt, answer=args.answer)
+    if args.json:
+        _print_json(payload)
+        return 0
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_critic_log(args: argparse.Namespace) -> int:
+    services = build_runtime()
+    payload = services.critic_refiner.log_failure(
+        kind=args.kind,
+        message=args.message,
+        metadata=json.loads(args.metadata_json) if args.metadata_json else {},
+    )
+    if args.json:
+        _print_json(payload)
+        return 0
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_critic_refine(args: argparse.Namespace) -> int:
+    services = build_runtime()
+    payload = services.critic_refiner.refine_rules()
     if args.json:
         _print_json(payload)
         return 0
@@ -725,6 +1117,35 @@ def _build_parser() -> argparse.ArgumentParser:
     task_show.add_argument("--task-id", required=True, help="logical task id")
     task_show.add_argument("--json", action="store_true", help="print JSON")
 
+    lanes = sub.add_parser("lanes", help="lane scheduler operations")
+    lanes_sub = lanes.add_subparsers(dest="lanes_command")
+    lanes_status = lanes_sub.add_parser("status", help="show lane scheduler status")
+    lanes_status.add_argument("--json", action="store_true", help="print JSON")
+    lanes_bump = lanes_sub.add_parser("bump", help="bump one lane generation")
+    lanes_bump.add_argument("--lane", required=True, help="lane name")
+    lanes_bump.add_argument("--json", action="store_true", help="print JSON")
+
+    delivery = sub.add_parser("delivery", help="delivery queue operations")
+    delivery_sub = delivery.add_subparsers(dest="delivery_command")
+    delivery_status = delivery_sub.add_parser("status", help="show delivery queue status")
+    delivery_status.add_argument("--json", action="store_true", help="print JSON")
+    delivery_enqueue = delivery_sub.add_parser("enqueue", help="enqueue one delivery item")
+    delivery_enqueue.add_argument("--kind", required=True, help="delivery kind")
+    delivery_enqueue.add_argument("--payload-json", required=True, help="JSON payload")
+    delivery_enqueue.add_argument("--max-attempts", type=int)
+    delivery_enqueue.add_argument("--json", action="store_true", help="print JSON")
+    delivery_process = delivery_sub.add_parser("process", help="process due delivery items")
+    delivery_process.add_argument("--max-items", type=int, default=20)
+    delivery_process.add_argument("--json", action="store_true", help="print JSON")
+    delivery_recover = delivery_sub.add_parser("recover", help="recover missing pending items from WAL")
+    delivery_recover.add_argument("--json", action="store_true", help="print JSON")
+
+    resilience = sub.add_parser("resilience", help="resilience runner drills")
+    resilience_sub = resilience.add_subparsers(dest="resilience_command")
+    resilience_drill = resilience_sub.add_parser("drill", help="run a scripted resilience drill")
+    resilience_drill.add_argument("--scenario", required=True, choices=["overflow_then_fallback", "auth_then_retry", "ok"])
+    resilience_drill.add_argument("--json", action="store_true", help="print JSON")
+
     cron = sub.add_parser("cron", help="cron scheduler operations")
     cron_sub = cron.add_subparsers(dest="cron_command")
     cron_list = cron_sub.add_parser("list", help="list registered cron jobs")
@@ -757,6 +1178,30 @@ def _build_parser() -> argparse.ArgumentParser:
     watchdog_simulate.add_argument("--component", required=True, help="component id")
     watchdog_simulate.add_argument("--json", action="store_true", help="print JSON")
 
+    hooks = sub.add_parser("hooks", help="hook runtime operations")
+    hooks_sub = hooks.add_subparsers(dest="hooks_command")
+    hooks_doctor = hooks_sub.add_parser("doctor", help="check AGENTS and hook modules")
+    hooks_doctor.add_argument("--json", action="store_true", help="print JSON")
+
+    skills = sub.add_parser("skills", help="skill runtime operations")
+    skills_sub = skills.add_subparsers(dest="skills_command")
+    skills_load = skills_sub.add_parser("load", help="load one built-in skill")
+    skills_load.add_argument("--name", required=True, help="skill name")
+    skills_load.add_argument("--json", action="store_true", help="print JSON")
+
+    background = sub.add_parser("background", help="background task operations")
+    background_sub = background.add_subparsers(dest="background_command")
+    background_run = background_sub.add_parser("run", help="enqueue one background task")
+    background_run.add_argument("--name", required=True, help="task name")
+    background_run.add_argument("--payload-json", required=True, help="JSON payload")
+    background_run.add_argument("--session-id", help="optional session id for provenance")
+    background_run.add_argument("--json", action="store_true", help="print JSON")
+    background_process = background_sub.add_parser("process", help="process queued background tasks")
+    background_process.add_argument("--max-items", type=int, default=20)
+    background_process.add_argument("--json", action="store_true", help="print JSON")
+    background_status = background_sub.add_parser("status", help="show background queue status")
+    background_status.add_argument("--json", action="store_true", help="print JSON")
+
     todo = sub.add_parser("todo", help="todo snapshot operations")
     todo_sub = todo.add_subparsers(dest="todo_command")
     todo_show = todo_sub.add_parser("show", help="show one todo snapshot")
@@ -772,6 +1217,46 @@ def _build_parser() -> argparse.ArgumentParser:
     context_group.add_argument("--session-id", help="show a specific session context snapshot")
     context_group.add_argument("--last", type=int, default=1, help="show latest N lookup, default latest")
     context_show.add_argument("--json", action="store_true", help="print JSON")
+
+    retrieval = sub.add_parser("retrieval", help="retrieval router operations")
+    retrieval_sub = retrieval.add_subparsers(dest="retrieval_command")
+    retrieval_decide = retrieval_sub.add_parser("decide", help="decide whether retrieval is needed")
+    retrieval_decide.add_argument("--prompt", required=True, help="prompt text")
+    retrieval_decide.add_argument("--json", action="store_true", help="print JSON")
+    retrieval_run = retrieval_sub.add_parser("run", help="run local retrieval and enoughness check")
+    retrieval_run.add_argument("--prompt", required=True, help="prompt text")
+    retrieval_run.add_argument("--json", action="store_true", help="print JSON")
+
+    memory = sub.add_parser("memory", help="memory ledger and views")
+    memory_sub = memory.add_subparsers(dest="memory_command")
+    memory_timeline = memory_sub.add_parser("timeline", help="show memory timeline view")
+    memory_timeline.add_argument("--json", action="store_true", help="print JSON")
+    memory_keyword = memory_sub.add_parser("keyword", help="lookup memory entries by keyword")
+    memory_keyword.add_argument("--keyword", required=True, help="keyword")
+    memory_keyword.add_argument("--json", action="store_true", help="print JSON")
+    memory_trace = memory_sub.add_parser("trace", help="show one ledger entry")
+    memory_trace.add_argument("--entry-id", required=True, help="memory entry id")
+    memory_trace.add_argument("--json", action="store_true", help="print JSON")
+
+    model = sub.add_parser("model", help="model routing operations")
+    model_sub = model.add_subparsers(dest="model_command")
+    model_route = model_sub.add_parser("route", help="select the routing profile for a prompt")
+    model_route.add_argument("--prompt", required=True, help="prompt text")
+    model_route.add_argument("--json", action="store_true", help="print JSON")
+
+    critic = sub.add_parser("critic", help="critic/refiner operations")
+    critic_sub = critic.add_subparsers(dest="critic_command")
+    critic_review = critic_sub.add_parser("review", help="run a heuristic review on one answer")
+    critic_review.add_argument("--prompt", required=True, help="prompt text")
+    critic_review.add_argument("--answer", required=True, help="answer text")
+    critic_review.add_argument("--json", action="store_true", help="print JSON")
+    critic_log = critic_sub.add_parser("log", help="log one failure sample")
+    critic_log.add_argument("--kind", required=True, help="failure kind")
+    critic_log.add_argument("--message", required=True, help="failure message")
+    critic_log.add_argument("--metadata-json", help="optional metadata JSON")
+    critic_log.add_argument("--json", action="store_true", help="print JSON")
+    critic_refine = critic_sub.add_parser("refine", help="derive rules from logged failures")
+    critic_refine.add_argument("--json", action="store_true", help="print JSON")
 
     return parser
 
@@ -817,6 +1302,27 @@ def main(
     if args.command == "task" and args.task_command == "show":
         return cmd_task_show(args)
 
+    if args.command == "lanes" and args.lanes_command == "status":
+        return cmd_lanes_status(args)
+
+    if args.command == "lanes" and args.lanes_command == "bump":
+        return cmd_lanes_bump(args)
+
+    if args.command == "delivery" and args.delivery_command == "status":
+        return cmd_delivery_status(args)
+
+    if args.command == "delivery" and args.delivery_command == "enqueue":
+        return cmd_delivery_enqueue(args)
+
+    if args.command == "delivery" and args.delivery_command == "process":
+        return cmd_delivery_process(args)
+
+    if args.command == "delivery" and args.delivery_command == "recover":
+        return cmd_delivery_recover(args)
+
+    if args.command == "resilience" and args.resilience_command == "drill":
+        return cmd_resilience_drill(args)
+
     if args.command == "cron" and args.cron_command == "list":
         return cmd_cron_list(args)
 
@@ -838,11 +1344,53 @@ def main(
     if args.command == "watchdog" and args.watchdog_command == "simulate":
         return cmd_watchdog_simulate(args)
 
+    if args.command == "hooks" and args.hooks_command == "doctor":
+        return cmd_hooks_doctor(args)
+
+    if args.command == "skills" and args.skills_command == "load":
+        return cmd_skills_load(args)
+
+    if args.command == "background" and args.background_command == "run":
+        return cmd_background_run(args)
+
+    if args.command == "background" and args.background_command == "process":
+        return cmd_background_process(args)
+
+    if args.command == "background" and args.background_command == "status":
+        return cmd_background_status(args)
+
     if args.command == "todo" and args.todo_command == "show":
         return cmd_todo_show(args)
 
     if args.command == "context" and args.context_command == "show":
         return cmd_context_show(args)
+
+    if args.command == "retrieval" and args.retrieval_command == "decide":
+        return cmd_retrieval_decide(args)
+
+    if args.command == "retrieval" and args.retrieval_command == "run":
+        return cmd_retrieval_run(args)
+
+    if args.command == "memory" and args.memory_command == "timeline":
+        return cmd_memory_timeline(args)
+
+    if args.command == "memory" and args.memory_command == "keyword":
+        return cmd_memory_keyword(args)
+
+    if args.command == "memory" and args.memory_command == "trace":
+        return cmd_memory_trace(args)
+
+    if args.command == "model" and args.model_command == "route":
+        return cmd_model_route(args)
+
+    if args.command == "critic" and args.critic_command == "review":
+        return cmd_critic_review(args)
+
+    if args.command == "critic" and args.critic_command == "log":
+        return cmd_critic_log(args)
+
+    if args.command == "critic" and args.critic_command == "refine":
+        return cmd_critic_refine(args)
 
     services = build_runtime(model_client=model_client)
     shell_session_id = getattr(args, "session_id", None) if args.command == "shell" else None

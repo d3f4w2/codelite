@@ -9,9 +9,15 @@ from codelite.core.context import ContextCompact
 from codelite.core.heartbeat import HeartService
 from codelite.core.llm import ModelClient
 from codelite.core.loop import AgentLoop
+from codelite.core.memory_runtime import MemoryRuntime
+from codelite.core.model_router import ModelRouter
+from codelite.core.resilience import ResilienceRunner
+from codelite.core.retrieval import RetrievalRouter
+from codelite.core.skills_runtime import SkillRuntime
 from codelite.core.todo import TodoManager
 from codelite.core.tools import ToolRouter
 from codelite.core.worktree import WorktreeManager, WorktreeRecord
+from codelite.hooks import HookRuntime
 from codelite.storage.sessions import SessionStore
 from codelite.storage.tasks import TaskRecord, TaskStore
 
@@ -47,6 +53,12 @@ class TaskRunner:
         todo_manager: TodoManager | None = None,
         context_manager: ContextCompact | None = None,
         heart_service: HeartService | None = None,
+        retrieval_router: RetrievalRouter | None = None,
+        model_router: ModelRouter | None = None,
+        resilience_runner: ResilienceRunner | None = None,
+        skill_runtime: SkillRuntime | None = None,
+        memory_runtime: MemoryRuntime | None = None,
+        hook_runtime: HookRuntime | None = None,
     ) -> None:
         self.workspace_root = workspace_root.resolve()
         self.config = config
@@ -57,6 +69,12 @@ class TaskRunner:
         self.todo_manager = todo_manager
         self.context_manager = context_manager
         self.heart_service = heart_service
+        self.retrieval_router = retrieval_router
+        self.model_router = model_router
+        self.resilience_runner = resilience_runner
+        self.skill_runtime = skill_runtime
+        self.memory_runtime = memory_runtime
+        self.hook_runtime = hook_runtime
 
     def run(
         self,
@@ -98,6 +116,7 @@ class TaskRunner:
                 self.config.runtime,
                 todo_manager=self.todo_manager,
                 heart_service=self.heart_service,
+                hook_runtime=self.hook_runtime,
             )
             loop = AgentLoop(
                 config=self.config,
@@ -107,6 +126,11 @@ class TaskRunner:
                 todo_manager=self.todo_manager,
                 context_manager=self.context_manager,
                 heart_service=self.heart_service,
+                retrieval_router=self.retrieval_router,
+                model_router=self.model_router,
+                resilience_runner=self.resilience_runner,
+                skill_runtime=self.skill_runtime,
+                memory_runtime=self.memory_runtime,
             )
             answer = loop.run_turn(session_id=current_session_id, user_input=prompt)
             completed_task = self.task_store.complete_task(task_id, lease_id=lease.lease_id)

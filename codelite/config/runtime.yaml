@@ -51,3 +51,7 @@ runtime:
   heart_red_fail_streak: 3
   scheduler_enabled: true
   timezone: "Asia/Shanghai"
+  delivery_max_attempts: 3
+  delivery_backoff_base_sec: 5
+  todo_nag_after_steps: 3
+  retrieval_max_results: 5

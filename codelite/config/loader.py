@@ -91,6 +91,10 @@ class RuntimeConfig:
     heart_red_fail_streak: int
     scheduler_enabled: bool
     timezone: str
+    delivery_max_attempts: int
+    delivery_backoff_base_sec: int
+    todo_nag_after_steps: int
+    retrieval_max_results: int
 
 
 @dataclass(frozen=True)
@@ -168,6 +172,10 @@ def load_app_config(workspace_root: Path | None = None) -> AppConfig:
             heart_red_fail_streak=int(_get(expanded, "runtime.heart_red_fail_streak", 3)),
             scheduler_enabled=bool(_get(expanded, "runtime.scheduler_enabled", True)),
             timezone=str(_get(expanded, "runtime.timezone", "Asia/Shanghai")),
+            delivery_max_attempts=int(_get(expanded, "runtime.delivery_max_attempts", 3)),
+            delivery_backoff_base_sec=int(_get(expanded, "runtime.delivery_backoff_base_sec", 5)),
+            todo_nag_after_steps=int(_get(expanded, "runtime.todo_nag_after_steps", 3)),
+            retrieval_max_results=int(_get(expanded, "runtime.retrieval_max_results", 5)),
         ),
     )
 

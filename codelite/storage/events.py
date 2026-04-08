@@ -68,6 +68,78 @@ class RuntimeLayout:
     def watchdog_dir(self) -> Path:
         return self.runtime_dir / "watchdog"
 
+    @property
+    def lanes_dir(self) -> Path:
+        return self.runtime_dir / "lanes"
+
+    @property
+    def delivery_queue_dir(self) -> Path:
+        return self.runtime_dir / "delivery-queue"
+
+    @property
+    def delivery_wal_dir(self) -> Path:
+        return self.delivery_queue_dir / "wal"
+
+    @property
+    def delivery_pending_dir(self) -> Path:
+        return self.delivery_queue_dir / "pending"
+
+    @property
+    def delivery_done_dir(self) -> Path:
+        return self.delivery_queue_dir / "done"
+
+    @property
+    def delivery_failed_dir(self) -> Path:
+        return self.delivery_queue_dir / "failed"
+
+    @property
+    def audit_path(self) -> Path:
+        return self.runtime_dir / "audit.jsonl"
+
+    @property
+    def hooks_dir(self) -> Path:
+        return self.runtime_dir / "hooks"
+
+    @property
+    def hook_events_path(self) -> Path:
+        return self.hooks_dir / "events.jsonl"
+
+    @property
+    def hook_failures_path(self) -> Path:
+        return self.hooks_dir / "validation-failures.jsonl"
+
+    @property
+    def memory_dir(self) -> Path:
+        return self.runtime_dir / "memory"
+
+    @property
+    def memory_ledger_path(self) -> Path:
+        return self.memory_dir / "ledger.jsonl"
+
+    @property
+    def memory_views_dir(self) -> Path:
+        return self.memory_dir / "views"
+
+    @property
+    def background_dir(self) -> Path:
+        return self.runtime_dir / "background"
+
+    @property
+    def background_results_dir(self) -> Path:
+        return self.background_dir / "results"
+
+    @property
+    def critic_dir(self) -> Path:
+        return self.runtime_dir / "critic"
+
+    @property
+    def critic_failures_path(self) -> Path:
+        return self.critic_dir / "failures.jsonl"
+
+    @property
+    def critic_rules_path(self) -> Path:
+        return self.critic_dir / "rules.json"
+
     def ensure(self) -> None:
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
@@ -80,6 +152,18 @@ class RuntimeLayout:
         self.metrics_dir.mkdir(parents=True, exist_ok=True)
         self.cron_dir.mkdir(parents=True, exist_ok=True)
         self.watchdog_dir.mkdir(parents=True, exist_ok=True)
+        self.lanes_dir.mkdir(parents=True, exist_ok=True)
+        self.delivery_queue_dir.mkdir(parents=True, exist_ok=True)
+        self.delivery_wal_dir.mkdir(parents=True, exist_ok=True)
+        self.delivery_pending_dir.mkdir(parents=True, exist_ok=True)
+        self.delivery_done_dir.mkdir(parents=True, exist_ok=True)
+        self.delivery_failed_dir.mkdir(parents=True, exist_ok=True)
+        self.hooks_dir.mkdir(parents=True, exist_ok=True)
+        self.memory_dir.mkdir(parents=True, exist_ok=True)
+        self.memory_views_dir.mkdir(parents=True, exist_ok=True)
+        self.background_dir.mkdir(parents=True, exist_ok=True)
+        self.background_results_dir.mkdir(parents=True, exist_ok=True)
+        self.critic_dir.mkdir(parents=True, exist_ok=True)
 
 
 class EventStore:

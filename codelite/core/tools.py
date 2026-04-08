@@ -10,6 +10,7 @@ from codelite.config import RuntimeConfig
 from codelite.core.heartbeat import HeartService
 from codelite.core.policy import PolicyError, PolicyGate
 from codelite.core.todo import TodoManager
+from codelite.hooks import HookRuntime
 
 
 class ToolError(RuntimeError):
@@ -31,6 +32,7 @@ class ToolRouter:
         todo_manager: TodoManager | None = None,
         session_id: str | None = None,
         heart_service: HeartService | None = None,
+        hook_runtime: HookRuntime | None = None,
     ) -> None:
         self.workspace_root = workspace_root.resolve()
         self.runtime_config = runtime_config
@@ -38,6 +40,7 @@ class ToolRouter:
         self.todo_manager = todo_manager
         self.session_id = session_id
         self.heart_service = heart_service
+        self.hook_runtime = hook_runtime
 
     def for_session(self, session_id: str) -> ToolRouter:
         return ToolRouter(
@@ -46,6 +49,7 @@ class ToolRouter:
             todo_manager=self.todo_manager,
             session_id=session_id,
             heart_service=self.heart_service,
+            hook_runtime=self.hook_runtime,
         )
 
     def tool_schemas(self) -> list[dict[str, Any]]:
@@ -141,8 +145,15 @@ class ToolRouter:
         try:
             if self.heart_service is not None:
                 self.heart_service.beat("tool_router")
+            if self.hook_runtime is not None:
+                self.hook_runtime.pre_tool_use(name, arguments)
             output = method(**arguments)
+            if self.hook_runtime is not None:
+                self.hook_runtime.post_tool_use(name, arguments, output)
         except PolicyError as exc:
+            self._note_error(str(exc))
+            raise ToolError(str(exc)) from exc
+        except RuntimeError as exc:
             self._note_error(str(exc))
             raise ToolError(str(exc)) from exc
         except ValueError as exc:
