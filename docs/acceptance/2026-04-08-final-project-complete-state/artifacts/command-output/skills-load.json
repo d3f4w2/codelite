@@ -1,0 +1,6 @@
+{
+  "name": "code-review",
+  "summary": "Find bugs, regressions, and missing tests before summarizing code changes.",
+  "prompt_hint": "Prioritize findings first, then short summary.",
+  "body": "Review code with a bug-finding mindset and call out risks with file references."
+}

@@ -1,0 +1,11 @@
+{
+  "reviewed_at": "2026-04-08T05:16:36.252383+00:00",
+  "prompt_preview": "summarize the work",
+  "answer_preview": "TODO",
+  "findings": [
+    "answer is too short to be a reliable completion",
+    "answer still contains TODO markers",
+    "answer does not clearly state an outcome"
+  ],
+  "passed": false
+}

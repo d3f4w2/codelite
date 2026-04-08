@@ -1,0 +1,38 @@
+{
+  "task": {
+    "task_id": "demo-task",
+    "title": "Demo Task",
+    "status": "done",
+    "created_at": "2026-04-08T05:16:32.084306+00:00",
+    "updated_at": "2026-04-08T05:16:32.343239+00:00",
+    "metadata": {
+      "worktree": {
+        "branch": "task/demo-task-3e872aea",
+        "path": "C:\\Users\\24719\\Desktop\\codelite\\docs\\acceptance\\2026-04-08-final-project-complete-state\\artifacts\\runtime\\worktree-demo\\runtime\\worktrees\\wt-demo-task-3e872aea-demo-task",
+        "base_ref": "HEAD"
+      },
+      "session_id": "20260408T051632Z-5ac1d12c",
+      "prompt": "Update app.txt inside the managed worktree.",
+      "workspace_root": "C:\\Users\\24719\\Desktop\\codelite\\docs\\acceptance\\2026-04-08-final-project-complete-state\\artifacts\\runtime\\worktree-demo",
+      "last_answer_preview": "task complete",
+      "result": "done"
+    },
+    "lease_id": null,
+    "lease_owner": null,
+    "lease_expires_at": null,
+    "blocked_reason": null
+  },
+  "worktree": {
+    "task_id": "demo-task",
+    "branch": "task/demo-task-3e872aea",
+    "path": "C:\\Users\\24719\\Desktop\\codelite\\docs\\acceptance\\2026-04-08-final-project-complete-state\\artifacts\\runtime\\worktree-demo\\runtime\\worktrees\\wt-demo-task-3e872aea-demo-task",
+    "base_ref": "HEAD",
+    "created_at": "2026-04-08T05:16:32.263461+00:00",
+    "head": null,
+    "attached": true,
+    "path_exists": true
+  },
+  "session_id": "20260408T051632Z-5ac1d12c",
+  "prompt": "Update app.txt inside the managed worktree.",
+  "answer": "task complete"
+}

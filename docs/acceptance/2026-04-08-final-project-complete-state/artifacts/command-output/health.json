@@ -1,0 +1,47 @@
+{
+  "version": "0.2.1",
+  "python": "3.13.11",
+  "platform": "Windows 11",
+  "cwd": "C:\\Users\\24719\\Desktop\\codelite",
+  "workspace_root": "C:\\Users\\24719\\Desktop\\codelite",
+  "runtime_dir": "C:\\Users\\24719\\Desktop\\codelite\\runtime",
+  "events_path": "C:\\Users\\24719\\Desktop\\codelite\\runtime\\events.jsonl",
+  "sessions_dir": "C:\\Users\\24719\\Desktop\\codelite\\runtime\\sessions",
+  "session_count": 24,
+  "managed_worktree_count": 1,
+  "event_count": 544,
+  "todo_snapshot_count": 0,
+  "context_snapshot_count": 0,
+  "cron_job_count": 5,
+  "lane_count": 3,
+  "delivery_pending_count": 0,
+  "delivery_failed_count": 0,
+  "memory_entry_count": 8,
+  "hearts_path": "C:\\Users\\24719\\Desktop\\codelite\\runtime\\hearts.jsonl",
+  "heart_status_summary": {
+    "unknown": 3,
+    "green": 10
+  },
+  "last_session_id": "20260408T041120Z-c57ad73f",
+  "llm": {
+    "provider": "openai",
+    "model": "gpt-5.4-mini",
+    "base_url": "https://code.rayinai.com/v1",
+    "configured": false
+  },
+  "embedding": {
+    "provider": "openai",
+    "model": "BAAI/bge-m3",
+    "base_url": "https://api.siliconflow.cn/v1",
+    "configured": false
+  },
+  "rerank": {
+    "provider": "openai",
+    "model": "Pro/BAAI/bge-reranker-v2-m3",
+    "base_url": "https://api.siliconflow.cn/v1",
+    "configured": false
+  },
+  "tavily": {
+    "configured": false
+  }
+}

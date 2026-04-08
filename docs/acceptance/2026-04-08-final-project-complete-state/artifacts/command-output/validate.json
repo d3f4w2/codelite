@@ -1,0 +1,55 @@
+{
+  "generated_at": "2026-04-08T05:16:39.212630+00:00",
+  "ok": true,
+  "stages": [
+    {
+      "stage": "build",
+      "command": [
+        "D:\\miniconda\\python.exe",
+        "-m",
+        "compileall",
+        "codelite"
+      ],
+      "exit_code": 0,
+      "ok": true,
+      "output": "Listing 'codelite'...\nListing 'codelite\\\\config'...\nListing 'codelite\\\\core'...\nListing 'codelite\\\\hooks'...\nListing 'codelite\\\\memory'...\nListing 'codelite\\\\storage'..."
+    },
+    {
+      "stage": "lint-arch",
+      "command": [
+        "D:\\miniconda\\python.exe",
+        "scripts/lint_arch.py",
+        "--json"
+      ],
+      "exit_code": 0,
+      "ok": true,
+      "output": "{\n  \"workspace_root\": \"C:\\\\Users\\\\24719\\\\Desktop\\\\codelite\",\n  \"ok\": true,\n  \"checks\": [\n    {\n      \"name\": \"AGENTS.md\",\n      \"path\": \"C:\\\\Users\\\\24719\\\\Desktop\\\\codelite\\\\AGENTS.md\",\n      \"ok\": true\n    },\n    {\n      \"name\": \"scripts/validate.py\",\n      \"path\": \"C:\\\\Users\\\\24719\\\\Desktop\\\\codelite\\\\scripts\\\\validate.py\",\n      \"ok\": true\n    },\n    {\n      \"name\": \"hooks/pre_tool_use.py\",\n      \"path\": \"C:\\\\Users\\\\24719\\\\Desktop\\\\codelite\\\\codelite\\\\hooks\\\\pre_tool_use.py\",\n      \"ok\": true\n    },\n    {\n      \"name\": \"hooks/post_tool_use.py\",\n      \"path\": \"C:\\\\Users\\\\24719\\\\Desktop\\\\codelite\\\\codelite\\\\hooks\\\\post_tool_use.py\",\n      \"ok\": true\n    },\n    {\n      \"name\": \"hooks/on_validation_fail.py\",\n      \"path\": \"C:\\\\Users\\\\24719\\\\Desktop\\\\codelite\\\\codelite\\\\hooks\\\\on_validation_fail.py\",\n      \"ok\": true\n    }\n  ]\n}"
+    },
+    {
+      "stage": "test",
+      "command": [
+        "D:\\miniconda\\python.exe",
+        "-m",
+        "pytest",
+        "tests/core/test_v021_mechanisms.py",
+        "-q"
+      ],
+      "exit_code": 0,
+      "ok": true,
+      "output": "...                                                                      [100%]\n3 passed in 1.02s"
+    },
+    {
+      "stage": "verify",
+      "command": [
+        "D:\\miniconda\\python.exe",
+        "-m",
+        "codelite.cli",
+        "health",
+        "--json"
+      ],
+      "exit_code": 0,
+      "ok": true,
+      "output": "{\n  \"version\": \"0.2.1\",\n  \"python\": \"3.13.11\",\n  \"platform\": \"Windows 11\",\n  \"cwd\": \"C:\\\\Users\\\\24719\\\\Desktop\\\\codelite\",\n  \"workspace_root\": \"C:\\\\Users\\\\24719\\\\Desktop\\\\codelite\",\n  \"runtime_dir\": \"C:\\\\Users\\\\24719\\\\Desktop\\\\codelite\\\\runtime\",\n  \"events_path\": \"C:\\\\Users\\\\24719\\\\Desktop\\\\codelite\\\\runtime\\\\events.jsonl\",\n  \"sessions_dir\": \"C:\\\\Users\\\\24719\\\\Desktop\\\\codelite\\\\runtime\\\\sessions\",\n  \"session_count\": 25,\n  \"managed_worktree_count\": 1,\n  \"event_count\": 746,\n  \"todo_snapshot_count\": 0,\n  \"context_snapshot_count\": 0,\n  \"cron_job_count\": 5,\n  \"lane_count\": 3,\n  \"delivery_pending_count\": 0,\n  \"delivery_failed_count\": 0,\n  \"memory_entry_count\": 14,\n  \"hearts_path\": \"C:\\\\Users\\\\24719\\\\Desktop\\\\codelite\\\\runtime\\\\hearts.jsonl\",\n  \"heart_status_summary\": {\n    \"unknown\": 3,\n    \"green\": 10\n  },\n  \"last_session_id\": \"20260408T041120Z-c57ad73f\",\n  \"llm\": {\n    \"provider\": \"openai\",\n    \"model\": \"gpt-5.4-mini\",\n    \"base_url\": \"https://code.rayinai.com/v1\",\n    \"configured\": false\n  },\n  \"embedding\": {\n    \"provider\": \"openai\",\n    \"model\": \"BAAI/bge-m3\",\n    \"base_url\": \"https://api.siliconflow.cn/v1\",\n    \"configured\": false\n  },\n  \"rerank\": {\n    \"provider\": \"openai\",\n    \"model\": \"Pro/BAAI/bge-reranker-v2-m3\",\n    \"base_url\": \"https://api.siliconflow.cn/v1\",\n    \"configured\": false\n  },\n  \"tavily\": {\n    \"configured\": false\n  }\n}"
+    }
+  ]
+}

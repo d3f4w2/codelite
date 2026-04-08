@@ -1,0 +1,57 @@
+[
+  {
+    "name": "compact_maintenance",
+    "schedule": "*/15 * * * *",
+    "description": "Create context snapshots for sessions that exceed the compaction threshold.",
+    "enabled": true,
+    "due": false,
+    "last_run_at": null,
+    "last_status": null,
+    "last_error": "",
+    "run_count": 0
+  },
+  {
+    "name": "heartbeat_scan",
+    "schedule": "*/1 * * * *",
+    "description": "Collect current heartbeat status for all registered components.",
+    "enabled": true,
+    "due": true,
+    "last_run_at": null,
+    "last_status": null,
+    "last_error": "",
+    "run_count": 0
+  },
+  {
+    "name": "metrics_rollup",
+    "schedule": "0 * * * *",
+    "description": "Roll up runtime metrics into runtime/metrics/rollup-latest.json.",
+    "enabled": true,
+    "due": false,
+    "last_run_at": null,
+    "last_status": null,
+    "last_error": "",
+    "run_count": 0
+  },
+  {
+    "name": "task_reconcile",
+    "schedule": "*/2 * * * *",
+    "description": "Reconcile expired task leases and move stale tasks into blocked.",
+    "enabled": true,
+    "due": true,
+    "last_run_at": null,
+    "last_status": null,
+    "last_error": "",
+    "run_count": 0
+  },
+  {
+    "name": "worktree_gc",
+    "schedule": "*/10 * * * *",
+    "description": "Clean orphaned managed worktree index records.",
+    "enabled": true,
+    "due": false,
+    "last_run_at": null,
+    "last_status": null,
+    "last_error": "",
+    "run_count": 0
+  }
+]

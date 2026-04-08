@@ -1,0 +1,5 @@
+{
+  "name": "review",
+  "model": "gpt-5.4-mini",
+  "reason": "prompt asks for review-style reasoning"
+}

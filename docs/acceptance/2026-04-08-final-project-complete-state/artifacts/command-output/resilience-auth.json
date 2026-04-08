@@ -1,0 +1,22 @@
+{
+  "profile": "fast",
+  "attempts": [
+    {
+      "layer": "auth_rotation",
+      "profile": "fast",
+      "status": "retry",
+      "error": "AUTH_ERROR"
+    },
+    {
+      "layer": "complete",
+      "profile": "fast",
+      "status": "ok",
+      "error": ""
+    }
+  ],
+  "result": {
+    "text": "resilience succeeded after auth rotation",
+    "tool_call_count": 0,
+    "usage": {}
+  }
+}

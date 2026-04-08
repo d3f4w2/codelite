@@ -1,0 +1,44 @@
+{
+  "decision": {
+    "prompt": "Read README and summarize runtime services",
+    "route": "local_docs",
+    "retrieve": true,
+    "enough": true,
+    "reason": "prompt points at local documentation",
+    "query_terms": [
+      "read",
+      "readme",
+      "runtime",
+      "services",
+      "summarize"
+    ],
+    "result_count": 5
+  },
+  "results": [
+    {
+      "path": "docs\\acceptance\\README.md",
+      "line": 3,
+      "text": "This directory stores human-readable acceptance bundles for each completed stage."
+    },
+    {
+      "path": "docs\\acceptance\\README.md",
+      "line": 15,
+      "text": "- `docs/acceptance/YYYY-MM-DD-<slug>/README.md`"
+    },
+    {
+      "path": "docs\\acceptance\\README.md",
+      "line": 18,
+      "text": "- `docs/acceptance/YYYY-MM-DD-<slug>/artifacts/runtime/`"
+    },
+    {
+      "path": "docs\\acceptance\\README.md",
+      "line": 24,
+      "text": "- [2026-04-07-phase-0-v00-and-task-lease/README.md](c:/Users/24719/Desktop/codelite/docs/acceptance/2026-04-07-phase-0-v00-and-task-lease/README.md)"
+    },
+    {
+      "path": "docs\\acceptance\\README.md",
+      "line": 29,
+      "text": "- [2026-04-07-current-completed-state/README.md](c:/Users/24719/Desktop/codelite/docs/acceptance/2026-04-07-current-completed-state/README.md)"
+    }
+  ]
+}

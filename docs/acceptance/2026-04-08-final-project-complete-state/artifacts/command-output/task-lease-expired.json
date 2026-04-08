@@ -1,0 +1,28 @@
+{
+  "reconciled": [
+    {
+      "task_id": "expired-demo",
+      "title": "",
+      "status": "blocked",
+      "created_at": "2026-04-08T05:16:30.616906+00:00",
+      "updated_at": "2026-04-08T05:16:30.620448+00:00",
+      "metadata": {},
+      "lease_id": null,
+      "lease_owner": null,
+      "lease_expires_at": null,
+      "blocked_reason": "lease expired"
+    }
+  ],
+  "final": {
+    "task_id": "expired-demo",
+    "title": "",
+    "status": "blocked",
+    "created_at": "2026-04-08T05:16:30.616906+00:00",
+    "updated_at": "2026-04-08T05:16:30.620448+00:00",
+    "metadata": {},
+    "lease_id": null,
+    "lease_owner": null,
+    "lease_expires_at": null,
+    "blocked_reason": "lease expired"
+  }
+}

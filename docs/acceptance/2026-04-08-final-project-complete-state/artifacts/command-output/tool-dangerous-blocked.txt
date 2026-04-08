@@ -1,0 +1,2 @@
+ToolError
+危险命令已拦截: rm -rf .

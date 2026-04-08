@@ -1,0 +1,171 @@
+{
+  "generated_at": "2026-04-08T05:16:35.421520+00:00",
+  "items": [
+    {
+      "entry_id": "6847c15754d54d62b087a4ad8b57bf10",
+      "kind": "retrieval",
+      "text": "local_docs: Read README and summarize runtime services",
+      "created_at": "2026-04-08T04:53:19.962306+00:00",
+      "metadata": {
+        "route": "local_docs",
+        "result_count": 5
+      },
+      "evidence": [
+        {
+          "path": "docs\\acceptance\\README.md",
+          "line": 3,
+          "text": "This directory stores human-readable acceptance bundles for each completed stage."
+        },
+        {
+          "path": "docs\\acceptance\\README.md",
+          "line": 15,
+          "text": "- `docs/acceptance/YYYY-MM-DD-<slug>/README.md`"
+        },
+        {
+          "path": "docs\\acceptance\\README.md",
+          "line": 18,
+          "text": "- `docs/acceptance/YYYY-MM-DD-<slug>/artifacts/runtime/`"
+        }
+      ]
+    },
+    {
+      "entry_id": "1a72ec9d72ed4ff58797120c70538c34",
+      "kind": "skill",
+      "text": "Find bugs, regressions, and missing tests before summarizing code changes.",
+      "created_at": "2026-04-08T04:57:31.751701+00:00",
+      "metadata": {
+        "skill_name": "code-review"
+      },
+      "evidence": []
+    },
+    {
+      "entry_id": "fb7ff4cef14f4adb8ff341dd90a48aee",
+      "kind": "skill",
+      "text": "Find bugs, regressions, and missing tests before summarizing code changes.",
+      "created_at": "2026-04-08T04:58:06.954816+00:00",
+      "metadata": {
+        "skill_name": "code-review"
+      },
+      "evidence": []
+    },
+    {
+      "entry_id": "0204f3327ac240d1963aff23b60506d5",
+      "kind": "skill",
+      "text": "Find bugs, regressions, and missing tests before summarizing code changes.",
+      "created_at": "2026-04-08T04:58:35.790116+00:00",
+      "metadata": {
+        "skill_name": "code-review"
+      },
+      "evidence": []
+    },
+    {
+      "entry_id": "66d06c7b401e4b75b6834096833d978e",
+      "kind": "skill",
+      "text": "Find bugs, regressions, and missing tests before summarizing code changes.",
+      "created_at": "2026-04-08T04:58:36.701907+00:00",
+      "metadata": {
+        "skill_name": "code-review"
+      },
+      "evidence": []
+    },
+    {
+      "entry_id": "7e2e8b8b393a43758b85a893456dbcb5",
+      "kind": "skill",
+      "text": "Find bugs, regressions, and missing tests before summarizing code changes.",
+      "created_at": "2026-04-08T04:58:38.324825+00:00",
+      "metadata": {
+        "skill_name": "code-review"
+      },
+      "evidence": []
+    },
+    {
+      "entry_id": "f77ecda2078443cdb77add8366720d5d",
+      "kind": "retrieval",
+      "text": "local_docs: Read README and summarize runtime services",
+      "created_at": "2026-04-08T05:01:01.565339+00:00",
+      "metadata": {
+        "route": "local_docs",
+        "result_count": 5
+      },
+      "evidence": [
+        {
+          "path": "docs\\acceptance\\README.md",
+          "line": 3,
+          "text": "This directory stores human-readable acceptance bundles for each completed stage."
+        },
+        {
+          "path": "docs\\acceptance\\README.md",
+          "line": 15,
+          "text": "- `docs/acceptance/YYYY-MM-DD-<slug>/README.md`"
+        },
+        {
+          "path": "docs\\acceptance\\README.md",
+          "line": 18,
+          "text": "- `docs/acceptance/YYYY-MM-DD-<slug>/artifacts/runtime/`"
+        }
+      ]
+    },
+    {
+      "entry_id": "0a2d45ea83b94bc7978f319eeb68046b",
+      "kind": "skill",
+      "text": "Find bugs, regressions, and missing tests before summarizing code changes.",
+      "created_at": "2026-04-08T05:01:04.423651+00:00",
+      "metadata": {
+        "skill_name": "code-review"
+      },
+      "evidence": []
+    },
+    {
+      "entry_id": "42ac6eab5e464a699fbf65b6b0904b36",
+      "kind": "skill",
+      "text": "Find bugs, regressions, and missing tests before summarizing code changes.",
+      "created_at": "2026-04-08T05:16:34.728568+00:00",
+      "metadata": {
+        "skill_name": "code-review"
+      },
+      "evidence": []
+    },
+    {
+      "entry_id": "69a2ee8ec3974cfe8e413d67ab913580",
+      "kind": "background",
+      "text": "digest completed",
+      "created_at": "2026-04-08T05:16:35.203108+00:00",
+      "metadata": {
+        "background_name": "digest",
+        "session_id": "final-bundle"
+      },
+      "evidence": [
+        {
+          "result_path": "C:\\Users\\24719\\Desktop\\codelite\\runtime\\background\\results\\digest-2026-04-08T051635-202423+0000.json"
+        }
+      ]
+    },
+    {
+      "entry_id": "945da1c7ad294df7b5d8035639b6329f",
+      "kind": "retrieval",
+      "text": "local_docs: Read README and summarize runtime services",
+      "created_at": "2026-04-08T05:16:35.420869+00:00",
+      "metadata": {
+        "route": "local_docs",
+        "result_count": 5
+      },
+      "evidence": [
+        {
+          "path": "docs\\acceptance\\README.md",
+          "line": 3,
+          "text": "This directory stores human-readable acceptance bundles for each completed stage."
+        },
+        {
+          "path": "docs\\acceptance\\README.md",
+          "line": 15,
+          "text": "- `docs/acceptance/YYYY-MM-DD-<slug>/README.md`"
+        },
+        {
+          "path": "docs\\acceptance\\README.md",
+          "line": 18,
+          "text": "- `docs/acceptance/YYYY-MM-DD-<slug>/artifacts/runtime/`"
+        }
+      ]
+    }
+  ]
+}

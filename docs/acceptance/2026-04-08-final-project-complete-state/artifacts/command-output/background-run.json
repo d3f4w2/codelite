@@ -1,0 +1,19 @@
+{
+  "delivery_id": "69d0746242614736ba5b754a4673ef9a",
+  "kind": "background_task",
+  "payload": {
+    "name": "digest",
+    "payload": {
+      "text": "hello"
+    },
+    "session_id": "final-bundle"
+  },
+  "status": "pending",
+  "attempts": 0,
+  "max_attempts": 3,
+  "created_at": "2026-04-08T05:16:34.986626+00:00",
+  "updated_at": "2026-04-08T05:16:34.986626+00:00",
+  "next_attempt_at": "2026-04-08T05:16:34.986626+00:00",
+  "last_error": "",
+  "last_result": null
+}

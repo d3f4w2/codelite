@@ -1,0 +1,91 @@
+{
+  "keyword": "runtime",
+  "entry_ids": [
+    "6847c15754d54d62b087a4ad8b57bf10",
+    "f77ecda2078443cdb77add8366720d5d",
+    "945da1c7ad294df7b5d8035639b6329f"
+  ],
+  "entries": [
+    {
+      "entry_id": "6847c15754d54d62b087a4ad8b57bf10",
+      "kind": "retrieval",
+      "text": "local_docs: Read README and summarize runtime services",
+      "metadata": {
+        "route": "local_docs",
+        "result_count": 5
+      },
+      "evidence": [
+        {
+          "path": "docs\\acceptance\\README.md",
+          "line": 3,
+          "text": "This directory stores human-readable acceptance bundles for each completed stage."
+        },
+        {
+          "path": "docs\\acceptance\\README.md",
+          "line": 15,
+          "text": "- `docs/acceptance/YYYY-MM-DD-<slug>/README.md`"
+        },
+        {
+          "path": "docs\\acceptance\\README.md",
+          "line": 18,
+          "text": "- `docs/acceptance/YYYY-MM-DD-<slug>/artifacts/runtime/`"
+        }
+      ],
+      "created_at": "2026-04-08T04:53:19.962306+00:00"
+    },
+    {
+      "entry_id": "f77ecda2078443cdb77add8366720d5d",
+      "kind": "retrieval",
+      "text": "local_docs: Read README and summarize runtime services",
+      "metadata": {
+        "route": "local_docs",
+        "result_count": 5
+      },
+      "evidence": [
+        {
+          "path": "docs\\acceptance\\README.md",
+          "line": 3,
+          "text": "This directory stores human-readable acceptance bundles for each completed stage."
+        },
+        {
+          "path": "docs\\acceptance\\README.md",
+          "line": 15,
+          "text": "- `docs/acceptance/YYYY-MM-DD-<slug>/README.md`"
+        },
+        {
+          "path": "docs\\acceptance\\README.md",
+          "line": 18,
+          "text": "- `docs/acceptance/YYYY-MM-DD-<slug>/artifacts/runtime/`"
+        }
+      ],
+      "created_at": "2026-04-08T05:01:01.565339+00:00"
+    },
+    {
+      "entry_id": "945da1c7ad294df7b5d8035639b6329f",
+      "kind": "retrieval",
+      "text": "local_docs: Read README and summarize runtime services",
+      "metadata": {
+        "route": "local_docs",
+        "result_count": 5
+      },
+      "evidence": [
+        {
+          "path": "docs\\acceptance\\README.md",
+          "line": 3,
+          "text": "This directory stores human-readable acceptance bundles for each completed stage."
+        },
+        {
+          "path": "docs\\acceptance\\README.md",
+          "line": 15,
+          "text": "- `docs/acceptance/YYYY-MM-DD-<slug>/README.md`"
+        },
+        {
+          "path": "docs\\acceptance\\README.md",
+          "line": 18,
+          "text": "- `docs/acceptance/YYYY-MM-DD-<slug>/artifacts/runtime/`"
+        }
+      ],
+      "created_at": "2026-04-08T05:16:35.420869+00:00"
+    }
+  ]
+}

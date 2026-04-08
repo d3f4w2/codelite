@@ -1,0 +1,6 @@
+{
+  "write": "Wrote 11 bytes to runtime\\manual-file.txt",
+  "first_read": "1: hello\n2: world",
+  "edit": "Edited runtime\\manual-file.txt",
+  "second_read": "1: hello\n2: codelite"
+}

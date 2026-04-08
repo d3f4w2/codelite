@@ -1,0 +1,11 @@
+{
+  "generated_at": "2026-04-08T05:16:36.746056+00:00",
+  "rule_count": 1,
+  "rules": [
+    {
+      "failure_kind": "validation",
+      "count": 1,
+      "rule": "rerun validate pipeline before reporting completion"
+    }
+  ]
+}

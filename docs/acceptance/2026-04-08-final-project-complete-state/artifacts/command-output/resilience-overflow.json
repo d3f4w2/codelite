@@ -1,0 +1,34 @@
+{
+  "profile": "deep",
+  "attempts": [
+    {
+      "layer": "overflow_compaction",
+      "profile": "fast",
+      "status": "retry",
+      "error": "CONTEXT_OVERFLOW"
+    },
+    {
+      "layer": "generic_retry",
+      "profile": "fast",
+      "status": "retry",
+      "error": "generic failure after compaction"
+    },
+    {
+      "layer": "fallback",
+      "profile": "fast",
+      "status": "failed",
+      "error": "generic failure after compaction"
+    },
+    {
+      "layer": "complete",
+      "profile": "deep",
+      "status": "ok",
+      "error": ""
+    }
+  ],
+  "result": {
+    "text": "resilience succeeded via fallback",
+    "tool_call_count": 0,
+    "usage": {}
+  }
+}

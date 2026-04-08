@@ -1,0 +1,2 @@
+ToolError
+路径越界已拦截: ../outside.txt

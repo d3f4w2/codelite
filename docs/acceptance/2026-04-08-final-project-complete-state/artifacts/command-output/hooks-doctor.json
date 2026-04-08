@@ -1,0 +1,21 @@
+{
+  "workspace_root": "C:\\Users\\24719\\Desktop\\codelite",
+  "agents_md_exists": true,
+  "agents_md_path": "C:\\Users\\24719\\Desktop\\codelite\\AGENTS.md",
+  "hook_events_path": "C:\\Users\\24719\\Desktop\\codelite\\runtime\\hooks\\events.jsonl",
+  "hook_failures_path": "C:\\Users\\24719\\Desktop\\codelite\\runtime\\hooks\\validation-failures.jsonl",
+  "modules": {
+    "pre_tool_use": {
+      "path": "C:\\Users\\24719\\Desktop\\codelite\\codelite\\hooks\\pre_tool_use.py",
+      "exists": true
+    },
+    "post_tool_use": {
+      "path": "C:\\Users\\24719\\Desktop\\codelite\\codelite\\hooks\\post_tool_use.py",
+      "exists": true
+    },
+    "on_validation_fail": {
+      "path": "C:\\Users\\24719\\Desktop\\codelite\\codelite\\hooks\\on_validation_fail.py",
+      "exists": true
+    }
+  }
+}

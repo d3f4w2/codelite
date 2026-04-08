@@ -1,0 +1,2 @@
+LeaseConflictError
+task `conflict-demo` already leased by `alpha`

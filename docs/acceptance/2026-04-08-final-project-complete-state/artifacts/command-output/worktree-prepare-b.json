@@ -1,0 +1,10 @@
+{
+  "task_id": "demo_b",
+  "branch": "task/demo_b-521aa3bc",
+  "path": "C:\\Users\\24719\\Desktop\\codelite\\docs\\acceptance\\2026-04-08-final-project-complete-state\\artifacts\\runtime\\worktree-demo\\runtime\\worktrees\\wt-demo_b-521aa3bc-task-b",
+  "base_ref": "HEAD",
+  "created_at": "2026-04-08T05:16:31.599840+00:00",
+  "head": "8f6bde47863d506ad59c45c21e42e7f486faa5f7",
+  "attached": true,
+  "path_exists": true
+}
