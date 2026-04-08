@@ -82,6 +82,15 @@ class RuntimeConfig:
     shell_timeout_sec: int
     file_size_limit_bytes: int
     tool_output_limit_chars: int
+    context_auto_compact_message_count: int
+    context_auto_compact_char_count: int
+    context_keep_last_messages: int
+    context_summary_line_chars: int
+    heart_green_window_sec: int
+    heart_yellow_window_sec: int
+    heart_red_fail_streak: int
+    scheduler_enabled: bool
+    timezone: str
 
 
 @dataclass(frozen=True)
@@ -146,6 +155,19 @@ def load_app_config(workspace_root: Path | None = None) -> AppConfig:
             shell_timeout_sec=int(_get(expanded, "runtime.shell_timeout_sec", 30)),
             file_size_limit_bytes=int(_get(expanded, "runtime.file_size_limit_bytes", 200000)),
             tool_output_limit_chars=int(_get(expanded, "runtime.tool_output_limit_chars", 12000)),
+            context_auto_compact_message_count=int(
+                _get(expanded, "runtime.context_auto_compact_message_count", 18)
+            ),
+            context_auto_compact_char_count=int(
+                _get(expanded, "runtime.context_auto_compact_char_count", 12000)
+            ),
+            context_keep_last_messages=int(_get(expanded, "runtime.context_keep_last_messages", 8)),
+            context_summary_line_chars=int(_get(expanded, "runtime.context_summary_line_chars", 120)),
+            heart_green_window_sec=int(_get(expanded, "runtime.heart_green_window_sec", 30)),
+            heart_yellow_window_sec=int(_get(expanded, "runtime.heart_yellow_window_sec", 90)),
+            heart_red_fail_streak=int(_get(expanded, "runtime.heart_red_fail_streak", 3)),
+            scheduler_enabled=bool(_get(expanded, "runtime.scheduler_enabled", True)),
+            timezone=str(_get(expanded, "runtime.timezone", "Asia/Shanghai")),
         ),
     )
 

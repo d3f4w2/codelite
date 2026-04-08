@@ -5,8 +5,11 @@ from pathlib import Path
 from typing import Any
 
 from codelite.config import AppConfig
+from codelite.core.context import ContextCompact
+from codelite.core.heartbeat import HeartService
 from codelite.core.llm import ModelClient
 from codelite.core.loop import AgentLoop
+from codelite.core.todo import TodoManager
 from codelite.core.tools import ToolRouter
 from codelite.core.worktree import WorktreeManager, WorktreeRecord
 from codelite.storage.sessions import SessionStore
@@ -41,6 +44,9 @@ class TaskRunner:
         task_store: TaskStore,
         worktree_manager: WorktreeManager,
         model_client: ModelClient,
+        todo_manager: TodoManager | None = None,
+        context_manager: ContextCompact | None = None,
+        heart_service: HeartService | None = None,
     ) -> None:
         self.workspace_root = workspace_root.resolve()
         self.config = config
@@ -48,6 +54,9 @@ class TaskRunner:
         self.task_store = task_store
         self.worktree_manager = worktree_manager
         self.model_client = model_client
+        self.todo_manager = todo_manager
+        self.context_manager = context_manager
+        self.heart_service = heart_service
 
     def run(
         self,
@@ -84,12 +93,20 @@ class TaskRunner:
                 },
             )
 
-            isolated_tool_router = ToolRouter(Path(worktree.path), self.config.runtime)
+            isolated_tool_router = ToolRouter(
+                Path(worktree.path),
+                self.config.runtime,
+                todo_manager=self.todo_manager,
+                heart_service=self.heart_service,
+            )
             loop = AgentLoop(
                 config=self.config,
                 session_store=self.session_store,
                 tool_router=isolated_tool_router,
                 model_client=self.model_client,
+                todo_manager=self.todo_manager,
+                context_manager=self.context_manager,
+                heart_service=self.heart_service,
             )
             answer = loop.run_turn(session_id=current_session_id, user_input=prompt)
             completed_task = self.task_store.complete_task(task_id, lease_id=lease.lease_id)

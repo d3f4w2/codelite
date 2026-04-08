@@ -5,6 +5,7 @@ import json
 import re
 import subprocess
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -90,16 +91,32 @@ class WorktreeManager:
 
     def list_managed(self) -> list[WorktreeRecord]:
         git_worktrees = self._git_worktrees_by_path()
-        records: list[WorktreeRecord] = []
+        records_by_path: dict[str, WorktreeRecord] = {}
         for path in sorted(self.layout.worktrees_index_dir.glob("*.json")):
             with path.open("r", encoding="utf-8") as handle:
                 record = WorktreeRecord.from_dict(json.load(handle))
-            records.append(self._hydrate_record(record, git_worktrees))
-        return records
+            records_by_path[record.path] = self._hydrate_record(record, git_worktrees)
+
+        for path, details in git_worktrees.items():
+            if path in records_by_path:
+                continue
+            task_id = _task_id_from_branch_ref(details.get("branch_ref"))
+            if task_id is None:
+                continue
+            record = self._recover_record(task_id, path, details)
+            records_by_path[path] = self._hydrate_record(record, git_worktrees)
+
+        return sorted(records_by_path.values(), key=lambda item: (item.created_at, item.task_id))
 
     def get_record(self, task_id: str) -> WorktreeRecord | None:
         path = self.record_path(task_id)
         if not path.exists():
+            branch = self.branch_name(task_id)
+            branch_ref = f"refs/heads/{branch}"
+            for worktree_path, details in self._git_worktrees_by_path().items():
+                if details.get("branch_ref") != branch_ref:
+                    continue
+                return self._recover_record(task_id, worktree_path, details)
             return None
         with path.open("r", encoding="utf-8") as handle:
             return WorktreeRecord.from_dict(json.load(handle))
@@ -144,7 +161,10 @@ class WorktreeManager:
         return self.layout.worktrees_dir / directory_name
 
     def record_path(self, task_id: str) -> Path:
-        return self.layout.worktrees_index_dir / f"{_worktree_key(task_id)}.json"
+        return self.record_path_for_key(_worktree_key(task_id))
+
+    def record_path_for_key(self, key: str) -> Path:
+        return self.layout.worktrees_index_dir / f"{key}.json"
 
     def _ensure_git_workspace(self) -> None:
         root = self._git("rev-parse", "--show-toplevel").strip()
@@ -239,6 +259,18 @@ class WorktreeManager:
             json.dump(record.to_dict(), handle, ensure_ascii=False, indent=2)
         tmp_path.replace(path)
 
+    def _recover_record(self, task_id: str, worktree_path: str, details: dict[str, str]) -> WorktreeRecord:
+        record_key = _task_key_from_branch_ref(details.get("branch_ref")) or _worktree_key(task_id)
+        record = WorktreeRecord(
+            task_id=task_id,
+            branch=_short_branch_name(details.get("branch_ref")) or self.branch_name(task_id),
+            path=worktree_path,
+            base_ref="HEAD",
+            created_at=_path_created_at(Path(worktree_path)),
+        )
+        self._write_record(self.record_path_for_key(record_key), record)
+        return record
+
 
 def _worktree_key(task_id: str) -> str:
     stripped = task_id.strip()
@@ -254,3 +286,37 @@ def _slug(value: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", value.strip()).strip("._-")
     cleaned = cleaned.lower()
     return cleaned[:32]
+
+
+def _short_branch_name(branch_ref: str | None) -> str | None:
+    if not branch_ref:
+        return None
+    prefix = "refs/heads/"
+    if branch_ref.startswith(prefix):
+        return branch_ref[len(prefix) :]
+    return branch_ref
+
+
+def _task_id_from_branch_ref(branch_ref: str | None) -> str | None:
+    key = _task_key_from_branch_ref(branch_ref)
+    if key is None:
+        return None
+    match = re.fullmatch(r"(?P<task_id>.+)-[0-9a-f]{8}", key)
+    if match is None:
+        return None
+    return match.group("task_id")
+
+
+def _task_key_from_branch_ref(branch_ref: str | None) -> str | None:
+    branch = _short_branch_name(branch_ref)
+    if not branch or not branch.startswith("task/"):
+        return None
+    return branch[len("task/") :]
+
+
+def _path_created_at(path: Path) -> str:
+    try:
+        timestamp = path.stat().st_ctime
+    except OSError:
+        return utc_now()
+    return datetime.fromtimestamp(timestamp, timezone.utc).isoformat()

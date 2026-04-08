@@ -1,6 +1,6 @@
 ﻿# CodeLite: 轻量可控的命令行 Code Agent（对标 Claude Code）
 
-## 0. 快速开始（v0.0 CLI）
+## 0. 快速开始（v0.2 CLI）
 
 先在仓库根目录安装本地命令行入口：
 
@@ -10,7 +10,7 @@ python -m pip install -e .
 
 ### 0.1 配置模型与 API
 
-`v0.0` 默认读取包内的 [`codelite/config/runtime.yaml`](codelite/config/runtime.yaml)，其中主模型已锁定为：
+当前版本 `0.2.0` 默认读取包内的 [`codelite/config/runtime.yaml`](codelite/config/runtime.yaml)，其中主模型已锁定为：
 
 - `provider=openai`
 - `model=gpt-5.4-mini`
@@ -31,8 +31,11 @@ $env:TAVILY_API_KEY="your-tavily-key"
 codelite
 codelite version
 codelite health --json
-codelite run "读取 README 并总结当前 v0.0 能力"
+codelite run "读取 README 并总结当前 v0.2 能力"
 codelite session replay --last 1
+codelite cron list --json
+codelite heart status --json
+codelite watchdog simulate --component tool_router --json
 ```
 
 说明：
@@ -41,13 +44,16 @@ codelite session replay --last 1
 - 运行时会自动落盘到 `runtime/events.jsonl` 与 `runtime/sessions/*.jsonl`。
 - `session replay` 可直接回放最近一次会话事件。
 
-### 0.3 当前 v0.0 已落地的能力
+### 0.3 当前 v0.2 已落地的能力
 
 - 主循环：最小 `plan -> act(tool) -> observe -> next`
-- 工具：`bash`、`read_file`、`write_file`、`edit_file`
+- 工具：`bash`、`read_file`、`write_file`、`edit_file`、`todo_write`
 - 护栏：危险命令拦截、工作区路径越界拦截
 - 持久化：全局事件流 + 单会话 JSONL
-- 可观测：`health`、`session replay`
+- 任务治理：任务租约、过期回收、受管 `worktree`
+- 上下文治理：todo 快照、context compact
+- 运行时运维：`cron`、`heart`、`watchdog`、`metrics_rollup`
+- 可观测：`health`、`session replay`、`todo show`、`context show`
 
 ## 1. 项目定位
 

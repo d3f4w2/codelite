@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codelite"
-version = "0.0.0"
-description = "CodeLite CLI foundation"
+version = "0.2.0"
+description = "CodeLite CLI runtime with v0.2 orchestration services"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "CodeLite Team" }]

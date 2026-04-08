@@ -8,14 +8,21 @@ import shlex
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from codelite import __version__
 from codelite.config import AppConfig, load_app_config
+from codelite.core.context import ContextCompact
+from codelite.core.events import EventBus
+from codelite.core.heartbeat import HeartService
 from codelite.core.llm import ModelClient
 from codelite.core.loop import AgentLoop
+from codelite.core.reconcile import Reconciler
+from codelite.core.scheduler import CronScheduler
 from codelite.core.task_runner import TaskRunner
+from codelite.core.todo import TodoManager
 from codelite.core.tools import ToolRouter
+from codelite.core.watchdog import Watchdog
 from codelite.core.worktree import WorktreeError, WorktreeManager
 from codelite.storage.events import EventStore, RuntimeLayout
 from codelite.storage.sessions import SessionStore
@@ -43,10 +50,17 @@ class RuntimeServices:
     config: AppConfig
     layout: RuntimeLayout
     event_store: EventStore
+    event_bus: EventBus
     session_store: SessionStore
     task_store: TaskStore
+    todo_manager: TodoManager
+    context_manager: ContextCompact
+    heart_service: HeartService
     tool_router: ToolRouter
     worktree_manager: WorktreeManager | None
+    reconciler: Reconciler
+    cron_scheduler: CronScheduler
+    watchdog: Watchdog
     agent_loop: AgentLoop
 
 
@@ -58,27 +72,99 @@ def build_runtime(
     config = load_app_config(root)
     layout = RuntimeLayout(root)
     event_store = EventStore(layout)
+    event_bus = EventBus(event_store)
     session_store = SessionStore(event_store)
     task_store = TaskStore(layout)
-    tool_router = ToolRouter(root, config.runtime)
+    todo_manager = TodoManager(layout, event_bus)
+    context_manager = ContextCompact(layout, config.runtime, event_bus)
+    heart_service = HeartService(layout, config.runtime, event_bus)
     try:
         worktree_manager = WorktreeManager(root)
     except WorktreeError:
         worktree_manager = None
+
+    tool_router = ToolRouter(
+        root,
+        config.runtime,
+        todo_manager=todo_manager,
+        heart_service=heart_service,
+    )
     agent_loop = AgentLoop(
         config=config,
         session_store=session_store,
         tool_router=tool_router,
         model_client=model_client,
+        todo_manager=todo_manager,
+        context_manager=context_manager,
+        heart_service=heart_service,
     )
+    reconciler = Reconciler(
+        layout=layout,
+        session_store=session_store,
+        task_store=task_store,
+        context_compact=context_manager,
+        heart_service=heart_service,
+        worktree_manager=worktree_manager,
+        event_bus=event_bus,
+    )
+    cron_scheduler = CronScheduler(
+        layout,
+        event_bus=event_bus,
+        enabled=config.runtime.scheduler_enabled,
+    )
+    cron_scheduler.register(
+        "heartbeat_scan",
+        "*/1 * * * *",
+        "Collect current heartbeat status for all registered components.",
+        lambda: heart_service.status(),
+    )
+    cron_scheduler.register(
+        "task_reconcile",
+        "*/2 * * * *",
+        "Reconcile expired task leases and move stale tasks into blocked.",
+        lambda: {"expired_task_ids": reconciler.reconcile_expired_leases()},
+    )
+    cron_scheduler.register(
+        "compact_maintenance",
+        "*/15 * * * *",
+        "Create context snapshots for sessions that exceed the compaction threshold.",
+        lambda: {"compacted_sessions": reconciler.compact_sessions()},
+    )
+    cron_scheduler.register(
+        "metrics_rollup",
+        "0 * * * *",
+        "Roll up runtime metrics into runtime/metrics/rollup-latest.json.",
+        lambda: {"metrics_path": str(reconciler.rollup_metrics())},
+    )
+    watchdog = Watchdog(
+        layout,
+        heart_service=heart_service,
+        reconciler=reconciler,
+        event_bus=event_bus,
+    )
+
+    heart_service.beat("event_bus")
+    heart_service.beat("todo_manager")
+    heart_service.beat("context_compact")
+    heart_service.beat("cron_scheduler", queue_depth=len(cron_scheduler.jobs))
+    if worktree_manager is not None:
+        heart_service.beat("worktree_manager")
+
     return RuntimeServices(
         config=config,
         layout=layout,
         event_store=event_store,
+        event_bus=event_bus,
         session_store=session_store,
         task_store=task_store,
+        todo_manager=todo_manager,
+        context_manager=context_manager,
+        heart_service=heart_service,
         tool_router=tool_router,
         worktree_manager=worktree_manager,
+        reconciler=reconciler,
+        cron_scheduler=cron_scheduler,
+        watchdog=watchdog,
         agent_loop=agent_loop,
     )
 
@@ -101,6 +187,10 @@ def _count_lines(path: Path) -> int:
 
 def build_health_snapshot(services: RuntimeServices) -> dict[str, Any]:
     latest = services.session_store.latest_session_ids(limit=1)
+    heart = services.heart_service.status()
+    heart_summary: dict[str, int] = {}
+    for component in heart["components"]:
+        heart_summary[component["status"]] = heart_summary.get(component["status"], 0) + 1
     return {
         **asdict(_runtime_info()),
         "workspace_root": str(services.layout.workspace_root),
@@ -110,6 +200,11 @@ def build_health_snapshot(services: RuntimeServices) -> dict[str, Any]:
         "session_count": len(list(services.layout.sessions_dir.glob("*.jsonl"))),
         "managed_worktree_count": len(services.worktree_manager.list_managed()) if services.worktree_manager else 0,
         "event_count": _count_lines(services.layout.events_path),
+        "todo_snapshot_count": len(list(services.layout.todos_dir.glob("*.json"))),
+        "context_snapshot_count": len(list(services.layout.context_dir.glob("*.json"))),
+        "cron_job_count": len(services.cron_scheduler.jobs),
+        "hearts_path": str(services.layout.hearts_path),
+        "heart_status_summary": heart_summary,
         "last_session_id": latest[0] if latest else None,
         "llm": {
             "provider": services.config.llm.provider,
@@ -181,6 +276,17 @@ def _resolve_task_prompt(services: RuntimeServices, args: argparse.Namespace) ->
     return f"Please complete task {args.task_id} inside the managed worktree."
 
 
+def _resolve_latest_id(
+    session_id: str | None,
+    limit: int,
+    latest_fn: Callable[[int], list[str]],
+) -> str | None:
+    if session_id:
+        return session_id
+    latest = latest_fn(limit)
+    return latest[0] if latest else None
+
+
 def cmd_health(args: argparse.Namespace) -> int:
     services = build_runtime()
     snapshot = build_health_snapshot(services)
@@ -199,7 +305,7 @@ def cmd_health(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    services = build_runtime()
+    services = build_runtime(model_client=getattr(args, "_model_client", None))
     session_id = args.session_id or services.session_store.new_session_id()
     prompt = " ".join(args.prompt).strip()
     answer = services.agent_loop.run_turn(session_id=session_id, user_input=prompt)
@@ -216,7 +322,7 @@ def cmd_session_replay(args: argparse.Namespace) -> int:
     services = build_runtime()
     session_ids = _resolve_replay_session_ids(services, args)
     if not session_ids:
-        print("没有可回放的会话。")
+        print("No sessions available to replay.")
         return 1
 
     payload = []
@@ -309,6 +415,9 @@ def cmd_task_run(args: argparse.Namespace) -> int:
         task_store=services.task_store,
         worktree_manager=services.worktree_manager,
         model_client=services.agent_loop.model_client,
+        todo_manager=services.todo_manager,
+        context_manager=services.context_manager,
+        heart_service=services.heart_service,
     )
     result = runner.run(
         task_id=args.task_id,
@@ -370,6 +479,118 @@ def cmd_task_show(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_cron_list(args: argparse.Namespace) -> int:
+    services = build_runtime()
+    payload = services.cron_scheduler.list_jobs()
+    if args.json:
+        _print_json(payload)
+        return 0
+    for item in payload:
+        print(f"{item['name']}: {item['schedule']} | due={item['due']} | last_status={item['last_status']}")
+    return 0
+
+
+def cmd_cron_run(args: argparse.Namespace) -> int:
+    services = build_runtime()
+    payload = services.cron_scheduler.run_job(args.job)
+    if args.json:
+        _print_json(payload)
+        return 0
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_cron_tick(args: argparse.Namespace) -> int:
+    services = build_runtime()
+    payload = services.cron_scheduler.run_due()
+    if args.json:
+        _print_json(payload)
+        return 0
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_heart_status(args: argparse.Namespace) -> int:
+    services = build_runtime()
+    payload = services.heart_service.status()
+    if args.json:
+        _print_json(payload)
+        return 0
+    for item in payload["components"]:
+        print(f"{item['component_id']}: {item['status']} (age={item['last_seen_age_sec']})")
+    return 0
+
+
+def cmd_heart_beat(args: argparse.Namespace) -> int:
+    services = build_runtime()
+    payload = services.heart_service.beat(
+        args.component,
+        status=args.status,
+        queue_depth=args.queue_depth,
+        active_task_count=args.active_task_count,
+        last_error=args.last_error or "",
+        latency_ms_p95=args.latency_ms_p95,
+        failure_streak=args.failure_streak,
+    )
+    if args.json:
+        _print_json(payload.to_dict())
+        return 0
+    print(json.dumps(payload.to_dict(), ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_watchdog_scan(args: argparse.Namespace) -> int:
+    services = build_runtime()
+    payload = [decision.to_dict() for decision in services.watchdog.scan()]
+    if args.json:
+        _print_json(payload)
+        return 0
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_watchdog_simulate(args: argparse.Namespace) -> int:
+    services = build_runtime()
+    payload = services.watchdog.simulate(args.component).to_dict()
+    if args.json:
+        _print_json(payload)
+        return 0
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_todo_show(args: argparse.Namespace) -> int:
+    services = build_runtime()
+    session_id = _resolve_latest_id(args.session_id, args.last, services.todo_manager.latest_session_ids)
+    if session_id is None:
+        print("No todo snapshots available.")
+        return 1
+    payload = services.todo_manager.summarize(session_id)
+    if args.json:
+        _print_json(payload)
+        return 0
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_context_show(args: argparse.Namespace) -> int:
+    services = build_runtime()
+    session_id = _resolve_latest_id(args.session_id, args.last, services.context_manager.latest_session_ids)
+    if session_id is None:
+        print("No context snapshots available.")
+        return 1
+    snapshot = services.context_manager.get(session_id)
+    if snapshot is None:
+        print(f"Context snapshot not found for session: {session_id}")
+        return 1
+    payload = snapshot.to_dict()
+    if args.json:
+        _print_json(payload)
+        return 0
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 class CodeLiteShell:
     def __init__(self, services: RuntimeServices, session_id: str | None = None) -> None:
         self.services = services
@@ -379,8 +600,8 @@ class CodeLiteShell:
 
     def run(self) -> int:
         print(f"CodeLite v{__version__}")
-        print(f"会话: {self.session_id}")
-        print("直接输入任务发送给 Agent；输入 help 查看本地命令，输入 exit 退出。")
+        print(f"session: {self.session_id}")
+        print("Type a task to send it to the agent. Use `help` for local commands, or `exit` to leave.")
         while self._running:
             try:
                 raw = input("codelite> ").strip()
@@ -396,7 +617,7 @@ class CodeLiteShell:
                     continue
                 answer = self.services.agent_loop.run_turn(self.session_id, raw)
                 print(answer)
-            except Exception as exc:  # pragma: no cover - defensive shell guard
+            except Exception as exc:  # pragma: no cover
                 print(f"[error] {exc}")
         return 0
 
@@ -435,14 +656,13 @@ class CodeLiteShell:
 
     @staticmethod
     def _print_help() -> None:
-        print("本地命令:")
-        print("  help            显示帮助")
-        print("  version         显示版本")
-        print("  health          显示运行时健康信息")
-        print("  session id      显示当前会话 ID")
-        print("  session replay  回放最近会话")
-        print("  exit            退出")
-        print("其余输入会作为自然语言任务发送给 Agent。")
+        print("local commands:")
+        print("  help            show help")
+        print("  version         show version")
+        print("  health          show runtime health")
+        print("  session id      show current session id")
+        print("  session replay  replay the latest session")
+        print("  exit            quit")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -505,6 +725,54 @@ def _build_parser() -> argparse.ArgumentParser:
     task_show.add_argument("--task-id", required=True, help="logical task id")
     task_show.add_argument("--json", action="store_true", help="print JSON")
 
+    cron = sub.add_parser("cron", help="cron scheduler operations")
+    cron_sub = cron.add_subparsers(dest="cron_command")
+    cron_list = cron_sub.add_parser("list", help="list registered cron jobs")
+    cron_list.add_argument("--json", action="store_true", help="print JSON")
+    cron_run = cron_sub.add_parser("run", help="run one cron job immediately")
+    cron_run.add_argument("--job", required=True, help="job name")
+    cron_run.add_argument("--json", action="store_true", help="print JSON")
+    cron_tick = cron_sub.add_parser("tick", help="run all due cron jobs once")
+    cron_tick.add_argument("--json", action="store_true", help="print JSON")
+
+    heart = sub.add_parser("heart", help="heartbeat operations")
+    heart_sub = heart.add_subparsers(dest="heart_command")
+    heart_status = heart_sub.add_parser("status", help="show heartbeat status")
+    heart_status.add_argument("--json", action="store_true", help="print JSON")
+    heart_beat = heart_sub.add_parser("beat", help="emit one component heartbeat")
+    heart_beat.add_argument("--component", required=True, help="component id")
+    heart_beat.add_argument("--status", default="green", help="status hint")
+    heart_beat.add_argument("--queue-depth", type=int, default=0)
+    heart_beat.add_argument("--active-task-count", type=int, default=0)
+    heart_beat.add_argument("--latency-ms-p95", type=float, default=0.0)
+    heart_beat.add_argument("--last-error", default="")
+    heart_beat.add_argument("--failure-streak", type=int, default=0)
+    heart_beat.add_argument("--json", action="store_true", help="print JSON")
+
+    watchdog = sub.add_parser("watchdog", help="watchdog operations")
+    watchdog_sub = watchdog.add_subparsers(dest="watchdog_command")
+    watchdog_scan = watchdog_sub.add_parser("scan", help="scan all components for red health")
+    watchdog_scan.add_argument("--json", action="store_true", help="print JSON")
+    watchdog_simulate = watchdog_sub.add_parser("simulate", help="simulate one component failure")
+    watchdog_simulate.add_argument("--component", required=True, help="component id")
+    watchdog_simulate.add_argument("--json", action="store_true", help="print JSON")
+
+    todo = sub.add_parser("todo", help="todo snapshot operations")
+    todo_sub = todo.add_subparsers(dest="todo_command")
+    todo_show = todo_sub.add_parser("show", help="show one todo snapshot")
+    todo_group = todo_show.add_mutually_exclusive_group()
+    todo_group.add_argument("--session-id", help="show a specific session todo list")
+    todo_group.add_argument("--last", type=int, default=1, help="show latest N lookup, default latest")
+    todo_show.add_argument("--json", action="store_true", help="print JSON")
+
+    context = sub.add_parser("context", help="context snapshot operations")
+    context_sub = context.add_subparsers(dest="context_command")
+    context_show = context_sub.add_parser("show", help="show one compacted context snapshot")
+    context_group = context_show.add_mutually_exclusive_group()
+    context_group.add_argument("--session-id", help="show a specific session context snapshot")
+    context_group.add_argument("--last", type=int, default=1, help="show latest N lookup, default latest")
+    context_show.add_argument("--json", action="store_true", help="print JSON")
+
     return parser
 
 
@@ -548,6 +816,33 @@ def main(
 
     if args.command == "task" and args.task_command == "show":
         return cmd_task_show(args)
+
+    if args.command == "cron" and args.cron_command == "list":
+        return cmd_cron_list(args)
+
+    if args.command == "cron" and args.cron_command == "run":
+        return cmd_cron_run(args)
+
+    if args.command == "cron" and args.cron_command == "tick":
+        return cmd_cron_tick(args)
+
+    if args.command == "heart" and args.heart_command == "status":
+        return cmd_heart_status(args)
+
+    if args.command == "heart" and args.heart_command == "beat":
+        return cmd_heart_beat(args)
+
+    if args.command == "watchdog" and args.watchdog_command == "scan":
+        return cmd_watchdog_scan(args)
+
+    if args.command == "watchdog" and args.watchdog_command == "simulate":
+        return cmd_watchdog_simulate(args)
+
+    if args.command == "todo" and args.todo_command == "show":
+        return cmd_todo_show(args)
+
+    if args.command == "context" and args.context_command == "show":
+        return cmd_context_show(args)
 
     services = build_runtime(model_client=model_client)
     shell_session_id = getattr(args, "session_id", None) if args.command == "shell" else None

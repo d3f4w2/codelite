@@ -126,7 +126,7 @@ def build_llm_client(workspace_root: Path) -> OpenAICompatibleClient:
 def test_v00_cli_version(workspace_dir: Path) -> None:
     repo = Path(__file__).resolve().parents[2]
     result = run_cli(repo, workspace_dir, "version")
-    assert result.stdout.strip() == "0.0.0"
+    assert result.stdout.strip() == "0.2.0"
 
 
 def test_v00_cli_health_json(workspace_dir: Path) -> None:
@@ -134,7 +134,7 @@ def test_v00_cli_health_json(workspace_dir: Path) -> None:
     result = run_cli(repo, workspace_dir, "health", "--json")
     payload = json.loads(result.stdout)
 
-    assert payload["version"] == "0.0.0"
+    assert payload["version"] == "0.2.0"
     assert payload["llm"]["model"] == "gpt-5.4-mini"
     assert payload["workspace_root"] == str(workspace_dir)
     assert payload["llm"]["configured"] is False

@@ -130,3 +130,31 @@ def test_worktree_cli_prepare_list_and_remove(git_repo: Path) -> None:
     assert removed_payload["attached"] is False
     assert removed_payload["path_exists"] is False
     assert not Path(prepared_payload["path"]).exists()
+
+
+def test_worktree_cli_recovers_when_index_is_missing(git_repo: Path) -> None:
+    first = json.loads(run_cli(git_repo, "worktree", "prepare", "--task-id", "demo_a", "--title", "Task A", "--json").stdout)
+    second = json.loads(run_cli(git_repo, "worktree", "prepare", "--task-id", "demo_b", "--title", "Task B", "--json").stdout)
+
+    index_dir = git_repo / "runtime" / "worktrees" / ".index"
+    shutil.rmtree(index_dir)
+    index_dir.mkdir(parents=True, exist_ok=True)
+
+    listed = run_cli(git_repo, "worktree", "list", "--json")
+    listed_payload = json.loads(listed.stdout)
+
+    assert {item["task_id"] for item in listed_payload} == {"demo_a", "demo_b"}
+    assert {item["path"] for item in listed_payload} == {first["path"], second["path"]}
+    assert all(item["attached"] is True for item in listed_payload)
+    assert all(item["path_exists"] is True for item in listed_payload)
+
+    recovered_index = {path.name for path in index_dir.glob("*.json")}
+    assert recovered_index == {"demo_a-f22183a9.json", "demo_b-521aa3bc.json"}
+
+    removed_a = json.loads(run_cli(git_repo, "worktree", "remove", "--task-id", "demo_a", "--json").stdout)
+    removed_b = json.loads(run_cli(git_repo, "worktree", "remove", "--task-id", "demo_b", "--json").stdout)
+
+    assert removed_a["attached"] is False
+    assert removed_b["attached"] is False
+    assert removed_a["path_exists"] is False
+    assert removed_b["path_exists"] is False

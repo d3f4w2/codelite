@@ -68,8 +68,8 @@ class SessionStore:
             messages.append(message)
         return messages
 
-    def latest_session_ids(self, limit: int = 1) -> list[str]:
-        return self.event_store.latest_session_ids(limit=limit)
+    def latest_session_ids(self, limit: int = 1, *, include_system: bool = False) -> list[str]:
+        return self.event_store.latest_session_ids(limit=limit, include_system=include_system)
 
     def replay(self, session_id: str) -> list[dict[str, Any]]:
         return self.event_store.read_session_events(session_id)

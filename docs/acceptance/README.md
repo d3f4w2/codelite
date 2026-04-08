@@ -29,6 +29,11 @@ Each stage should use this layout:
 - [2026-04-07-current-completed-state/README.md](c:/Users/24719/Desktop/codelite/docs/acceptance/2026-04-07-current-completed-state/README.md)
   Covers everything completed so far: `v0.0`, core tools and safety rails, task leases, managed worktrees, and task-to-worktree execution binding.
 
+### v0.2 Runtime Services
+
+- [2026-04-08-phase-3-v02-runtime-services/README.md](c:/Users/24719/Desktop/codelite/docs/acceptance/2026-04-08-phase-3-v02-runtime-services/README.md)
+  Covers the newly completed `v0.2` runtime services only: todo manager, context compaction, cron jobs, heart service, watchdog, reconcile, and metrics rollup.
+
 ## Workflow For Future Stages
 
 1. Create a new bundle directory.

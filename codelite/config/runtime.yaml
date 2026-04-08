@@ -42,3 +42,12 @@ runtime:
   shell_timeout_sec: 30
   file_size_limit_bytes: 200000
   tool_output_limit_chars: 12000
+  context_auto_compact_message_count: 18
+  context_auto_compact_char_count: 12000
+  context_keep_last_messages: 8
+  context_summary_line_chars: 120
+  heart_green_window_sec: 30
+  heart_yellow_window_sec: 90
+  heart_red_fail_streak: 3
+  scheduler_enabled: true
+  timezone: "Asia/Shanghai"
