@@ -94,6 +94,8 @@ class TaskRunner:
         session_id: str | None = None,
         owner: str = "task_runner",
         require_plan: bool = False,
+        turn_timeout_sec: float | None = None,
+        timeout_error_message: str | None = None,
     ) -> TaskRunResult:
         lease = self.task_store.acquire_lease(task_id, owner=owner, title=title or task_id)
 
@@ -152,6 +154,8 @@ class TaskRunner:
                 session_id=current_session_id,
                 user_input=prompt,
                 require_plan=require_plan,
+                turn_timeout_sec=turn_timeout_sec,
+                timeout_error_message=timeout_error_message,
             )
             completed_task = self.task_store.complete_task(task_id, lease_id=lease.lease_id)
             completed_task = self.task_store.update_metadata(

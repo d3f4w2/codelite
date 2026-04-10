@@ -526,22 +526,7 @@ class ShellRenderer:
                 f"model:    {model_line}    /model to change",
                 f"directory: {data.current_dir}",
             ]
-            status_line = self.render_prompt_status(
-                workspace_name=data.workspace_name or self._workspace_name(data.workspace_root),
-                session_id=data.session_id,
-                mode=ShellMode.ACT,
-                model_name=data.model_name,
-                provider=data.provider,
-                reasoning_effort=data.reasoning_effort,
-                remaining_percent=100,
-                current_dir=data.current_dir,
-            )
-            lines = [
-                *self._codex_box(rows),
-                "",
-                status_line,
-            ]
-            return "\n".join(self._fit(line, self.width) for line in lines)
+            return "\n".join(self._fit(line, self.width) for line in self._codex_box(rows))
         if self.is_claude_style():
             workspace_name = data.workspace_name or self._workspace_name(data.workspace_root)
             quick = "/help  /view full  /view compact"
@@ -874,7 +859,7 @@ class ShellRenderer:
         hint: str = 'Try "help me fix lint errors"',
     ) -> list[str]:
         palette_prefix = model.active_palette_prefix()
-        palette_visible = bool(palette_prefix and model.focus is ShellInputFocus.COMMAND)
+        palette_visible = bool(palette_prefix)
         suggestions = model.suggestions(limit=5) if palette_visible else []
         all_suggestions = model.suggestions(limit=32) if palette_visible else []
         notifications = notifications or []
@@ -885,7 +870,7 @@ class ShellRenderer:
             selected_index = next((idx for idx, item in enumerate(all_suggestions) if item.name == selected.name), None)
         window = model.input_window(limit=4)
         ghost_text = model.inline_ghost_text(hint=hint)
-        cursor = self._reverse(" ") if self._supports_color() else "█"
+        cursor = self._accent("█") if self._supports_color() else "█"
 
         if self.is_codex_style():
             input_lines = model.buffer.split("\n") or [""]
@@ -895,9 +880,12 @@ class ShellRenderer:
             ghost = self._dim(ghost_text) if model.cursor == len(model.buffer) and ghost_text else ""
             mode_chip = self._mode_chip(model.mode)
             session_tail = session_id[-4:] if session_id else "----"
+            status_line = f"{mode_chip}{self._sep()}s:{session_tail}"
+            if runtime_summary:
+                status_line += f"{self._sep()}{runtime_summary}"
             lines = [
                 self._fit(f"> {before}{cursor}{ghost}{after}", self.width),
-                self._fit(f"{mode_chip}{self._sep()}s:{session_tail}", self.width),
+                self._fit(status_line, self.width),
             ]
             if suggestions:
                 row_prefix = "$" if palette_prefix == "$" else "/"
@@ -905,7 +893,9 @@ class ShellRenderer:
                     active = selected is not None and item.name == selected.name
                     lines.append(self._fit(self._command_palette_line(item.name, item.description, prefix=row_prefix, active=active), self.width))
                 if palette_prefix == "$":
-                    lines.append(self._fit("Press enter to insert or esc to close", self.width))
+                    lines.append(self._fit("Enter insert • Esc close • Shift+Tab/Ctrl+M mode", self.width))
+                else:
+                    lines.append(self._fit("Tab/Up/Down browse • Enter insert • Shift+Tab/Ctrl+M mode", self.width))
             return lines
 
         lines: list[str] = [self._rule(self._line_char())]

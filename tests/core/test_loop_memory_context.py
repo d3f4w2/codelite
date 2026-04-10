@@ -20,6 +20,51 @@ class CaptureModelClient:
         return ModelResult(text="ok", tool_calls=[])
 
 
+class StreamingCaptureModelClient:
+    def __init__(self) -> None:
+        self.calls: list[list[dict[str, object]]] = []
+
+    def complete(self, messages: list[dict[str, object]], tools: list[dict[str, object]]) -> ModelResult:
+        del tools
+        self.calls.append(messages)
+        return ModelResult(text="hello", tool_calls=[])
+
+    def stream_complete(
+        self,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]],
+        *,
+        on_event: object | None = None,
+    ) -> ModelResult:
+        del tools
+        self.calls.append(messages)
+        if callable(on_event):
+            on_event({"type": "text", "text": "hel"})
+            on_event({"type": "text", "text": "lo"})
+        return ModelResult(text="hello", tool_calls=[])
+
+
+class TimeoutCaptureModelClient:
+    def __init__(self) -> None:
+        self.calls: list[list[dict[str, object]]] = []
+        self.request_timeout_sec: float | None = None
+
+    def stream_complete(
+        self,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]],
+        *,
+        on_event: object | None = None,
+        request_timeout_sec: float | None = None,
+    ) -> ModelResult:
+        del tools
+        self.calls.append(messages)
+        self.request_timeout_sec = request_timeout_sec
+        if callable(on_event):
+            on_event({"type": "text", "text": "ok"})
+        return ModelResult(text="ok", tool_calls=[])
+
+
 @pytest.fixture()
 def workspace_dir() -> Path:
     repo = Path(__file__).resolve().parents[2]
@@ -52,3 +97,51 @@ def test_loop_assembles_memory_context_and_emits_event(workspace_dir: Path, monk
     assembled = [event for event in events if event.get("event_type") == "memory_context_assembled"]
     assert assembled, "memory_context_assembled event should be emitted"
     assert assembled[-1]["payload"]["loaded_sources"]
+
+
+def test_loop_emits_model_stream_events_when_client_supports_streaming(
+    workspace_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CODELITE_WORKSPACE_ROOT", str(workspace_dir))
+
+    model = StreamingCaptureModelClient()
+    services = build_runtime(workspace_dir, model_client=model)
+
+    answer = services.agent_loop.run_turn("stream-test-session", "say hello")
+
+    assert answer == "hello"
+    events = services.session_store.replay("stream-test-session")
+    stream_events = [event for event in events if event.get("event_type") == "model_stream"]
+    text_events = [event for event in stream_events if (event.get("payload") or {}).get("type") == "text"]
+
+    assert text_events
+    assert "".join(str((event.get("payload") or {}).get("text", "")) for event in text_events) == "hello"
+    assistant_messages = [
+        dict(event.get("payload") or {})
+        for event in events
+        if event.get("event_type") == "message" and dict(event.get("payload") or {}).get("role") == "assistant"
+    ]
+    assert assistant_messages
+    assert assistant_messages[-1]["content"] == "hello"
+
+
+def test_loop_passes_remaining_turn_timeout_to_streaming_client(
+    workspace_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CODELITE_WORKSPACE_ROOT", str(workspace_dir))
+
+    model = TimeoutCaptureModelClient()
+    services = build_runtime(workspace_dir, model_client=model)
+
+    answer = services.agent_loop.run_turn(
+        "timeout-budget-session",
+        "say hello",
+        turn_timeout_sec=0.25,
+        timeout_error_message="shell turn timed out after 0.25s while waiting for model response",
+    )
+
+    assert answer == "ok"
+    assert model.request_timeout_sec is not None
+    assert 0 < float(model.request_timeout_sec) <= 0.25

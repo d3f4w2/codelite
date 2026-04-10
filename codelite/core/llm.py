@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import inspect
 import json
+import time
 import urllib.error
 import urllib.request
 import uuid
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 from codelite.config import LLMConfig
 
@@ -25,7 +27,13 @@ class ModelResult:
 
 
 class ModelClient(Protocol):
-    def complete(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> ModelResult:
+    def complete(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        *,
+        request_timeout_sec: float | None = None,
+    ) -> ModelResult:
         ...
 
 
@@ -43,10 +51,17 @@ class OpenAICompatibleClient:
     def __init__(self, config: LLMConfig) -> None:
         self.config = config
 
-    def complete(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> ModelResult:
+    def complete(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        *,
+        request_timeout_sec: float | None = None,
+    ) -> ModelResult:
         if not self.config.api_key:
             raise RuntimeError("LLM API key 未配置，请设置 CODELITE_LLM_API_KEY。")
 
+        started_at = time.monotonic()
         payload: dict[str, Any] = {
             "model": self.config.model,
             "messages": messages,
@@ -57,43 +72,77 @@ class OpenAICompatibleClient:
             payload["tools"] = [{"type": "function", "function": tool} for tool in tools]
             payload["tool_choice"] = "auto"
 
-        data = self._request(payload)
-        choice = (data.get("choices") or [{}])[0]
-        message = choice.get("message") or {}
-        tool_calls = []
-        for item in message.get("tool_calls") or []:
-            function = item.get("function") or {}
-            raw_arguments = function.get("arguments") or "{}"
-            try:
-                arguments = json.loads(raw_arguments)
-            except json.JSONDecodeError:
-                arguments = {"raw": raw_arguments}
-            tool_calls.append(
-                ToolCallRequest(
-                    id=item.get("id") or uuid.uuid4().hex,
-                    name=function.get("name", ""),
-                    arguments=arguments,
-                )
-            )
-
-        result = ModelResult(
-            text=self._extract_text(message.get("content")),
-            tool_calls=tool_calls,
-            usage=data.get("usage"),
+        data = self._call_with_optional_timeout(
+            self._request,
+            payload,
+            request_timeout_sec=request_timeout_sec,
         )
+        result = self._model_result_from_response(data)
 
         if not result.text.strip() and not result.tool_calls:
-            fallback = self._request_streaming_fallback(payload)
+            fallback = self._call_with_optional_timeout(
+                self._request_streaming_fallback,
+                payload,
+                request_timeout_sec=self._remaining_timeout(request_timeout_sec, started_at),
+            )
             if fallback.text.strip() or fallback.tool_calls:
                 return fallback
             raise RuntimeError(
                 "LLM 返回了 200，但没有文本内容也没有 tool_calls。"
-                "这通常说明当前网关对该模型的 OpenAI 兼容输出不完整。"
+                "当前网关的 OpenAI 兼容输出可能不完整。"
             )
 
         return result
 
-    def _request(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def stream_complete(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        *,
+        on_event: Callable[[dict[str, Any]], None] | None = None,
+        request_timeout_sec: float | None = None,
+    ) -> ModelResult:
+        if not self.config.api_key:
+            raise RuntimeError("LLM API key 未配置，请设置 CODELITE_LLM_API_KEY。")
+
+        started_at = time.monotonic()
+        payload: dict[str, Any] = {
+            "model": self.config.model,
+            "messages": messages,
+            "temperature": self.config.temperature,
+            "max_tokens": self.config.max_tokens,
+        }
+        if tools:
+            payload["tools"] = [{"type": "function", "function": tool} for tool in tools]
+            payload["tool_choice"] = "auto"
+
+        try:
+            result = self._request_streaming(
+                payload,
+                on_event=on_event,
+                request_timeout_sec=request_timeout_sec,
+            )
+        except RuntimeError:
+            return self.complete(
+                messages,
+                tools,
+                request_timeout_sec=self._remaining_timeout(request_timeout_sec, started_at),
+            )
+
+        if result.text.strip() or result.tool_calls:
+            return result
+        return self.complete(
+            messages,
+            tools,
+            request_timeout_sec=self._remaining_timeout(request_timeout_sec, started_at),
+        )
+
+    def _request(
+        self,
+        payload: dict[str, Any],
+        *,
+        request_timeout_sec: float | None = None,
+    ) -> dict[str, Any]:
         url = self.config.base_url.rstrip("/") + "/chat/completions"
         request = urllib.request.Request(
             url=url,
@@ -107,21 +156,35 @@ class OpenAICompatibleClient:
         )
 
         try:
-            with urllib.request.urlopen(request, timeout=self.config.timeout_sec) as response:
+            with urllib.request.urlopen(request, timeout=self._resolve_timeout(request_timeout_sec)) as response:
                 body = response.read().decode("utf-8")
         except urllib.error.HTTPError as exc:  # pragma: no cover - network dependent
             detail = exc.read().decode("utf-8", errors="replace")
             if exc.code == 400 and self._requires_instructions(detail):
                 normalized_payload = self._with_instructions(payload)
                 if normalized_payload != payload:
-                    return self._request(normalized_payload)
+                    return self._request(normalized_payload, request_timeout_sec=request_timeout_sec)
             raise RuntimeError(f"LLM 请求失败: HTTP {exc.code} {detail}") from exc
         except urllib.error.URLError as exc:  # pragma: no cover - network dependent
             raise RuntimeError(f"LLM 请求失败: {exc.reason}") from exc
 
         return json.loads(body)
 
-    def _request_streaming_fallback(self, payload: dict[str, Any]) -> ModelResult:
+    def _request_streaming_fallback(
+        self,
+        payload: dict[str, Any],
+        *,
+        request_timeout_sec: float | None = None,
+    ) -> ModelResult:
+        return self._request_streaming(payload, request_timeout_sec=request_timeout_sec)
+
+    def _request_streaming(
+        self,
+        payload: dict[str, Any],
+        *,
+        on_event: Callable[[dict[str, Any]], None] | None = None,
+        request_timeout_sec: float | None = None,
+    ) -> ModelResult:
         stream_payload = dict(payload)
         stream_payload["stream"] = True
         url = self.config.base_url.rstrip("/") + "/chat/completions"
@@ -139,9 +202,10 @@ class OpenAICompatibleClient:
 
         text_parts: list[str] = []
         tool_call_chunks: dict[int, dict[str, Any]] = {}
+        usage_payload: dict[str, Any] | None = None
 
         try:
-            with urllib.request.urlopen(request, timeout=self.config.timeout_sec) as response:
+            with urllib.request.urlopen(request, timeout=self._resolve_timeout(request_timeout_sec)) as response:
                 for raw_line in response:
                     line = raw_line.decode("utf-8", errors="replace").strip()
                     if not line or not line.startswith("data:"):
@@ -153,11 +217,19 @@ class OpenAICompatibleClient:
                         chunk = json.loads(data)
                     except json.JSONDecodeError:
                         continue
+                    usage = chunk.get("usage")
+                    if isinstance(usage, dict) and usage:
+                        usage_payload = dict(usage)
                     for choice in chunk.get("choices") or []:
                         delta = choice.get("delta") or {}
                         content = delta.get("content")
-                        if isinstance(content, str):
+                        if isinstance(content, str) and content:
                             text_parts.append(content)
+                            if on_event is not None:
+                                try:
+                                    on_event({"type": "text", "text": content})
+                                except Exception:
+                                    pass
                         for tool_call in delta.get("tool_calls") or []:
                             index = int(tool_call.get("index", 0))
                             entry = tool_call_chunks.setdefault(
@@ -180,10 +252,14 @@ class OpenAICompatibleClient:
             if exc.code == 400 and self._requires_instructions(detail):
                 normalized_payload = self._with_instructions(payload)
                 if normalized_payload != payload:
-                    return self._request_streaming_fallback(normalized_payload)
-            raise RuntimeError(f"LLM 流式回退失败: HTTP {exc.code} {detail}") from exc
+                    return self._request_streaming(
+                        normalized_payload,
+                        on_event=on_event,
+                        request_timeout_sec=request_timeout_sec,
+                    )
+            raise RuntimeError(f"LLM 流式请求失败: HTTP {exc.code} {detail}") from exc
         except urllib.error.URLError as exc:  # pragma: no cover - network dependent
-            raise RuntimeError(f"LLM 流式回退失败: {exc.reason}") from exc
+            raise RuntimeError(f"LLM 流式请求失败: {exc.reason}") from exc
 
         tool_calls: list[ToolCallRequest] = []
         for index in sorted(tool_call_chunks):
@@ -201,7 +277,31 @@ class OpenAICompatibleClient:
                 )
             )
 
-        return ModelResult(text="".join(text_parts), tool_calls=tool_calls, usage=None)
+        return ModelResult(text="".join(text_parts), tool_calls=tool_calls, usage=usage_payload)
+
+    def _model_result_from_response(self, data: dict[str, Any]) -> ModelResult:
+        choice = (data.get("choices") or [{}])[0]
+        message = choice.get("message") or {}
+        tool_calls: list[ToolCallRequest] = []
+        for item in message.get("tool_calls") or []:
+            function = item.get("function") or {}
+            raw_arguments = function.get("arguments") or "{}"
+            try:
+                arguments = json.loads(raw_arguments)
+            except json.JSONDecodeError:
+                arguments = {"raw": raw_arguments}
+            tool_calls.append(
+                ToolCallRequest(
+                    id=item.get("id") or uuid.uuid4().hex,
+                    name=function.get("name", ""),
+                    arguments=arguments,
+                )
+            )
+        return ModelResult(
+            text=self._extract_text(message.get("content")),
+            tool_calls=tool_calls,
+            usage=data.get("usage"),
+        )
 
     @staticmethod
     def _extract_text(content: Any) -> str:
@@ -246,3 +346,32 @@ class OpenAICompatibleClient:
         normalized["messages"] = remaining_messages
         normalized["instructions"] = "\n\n".join(system_contents)
         return normalized
+
+    def _resolve_timeout(self, request_timeout_sec: float | None) -> float:
+        if request_timeout_sec is None:
+            return float(self.config.timeout_sec)
+        return max(0.01, float(request_timeout_sec))
+
+    @staticmethod
+    def _call_with_optional_timeout(
+        func: Callable[..., Any],
+        payload: dict[str, Any],
+        *,
+        request_timeout_sec: float | None,
+    ) -> Any:
+        kwargs: dict[str, Any] = {}
+        if request_timeout_sec is not None:
+            try:
+                parameters = inspect.signature(func).parameters
+            except (TypeError, ValueError):
+                parameters = {}
+            if "request_timeout_sec" in parameters:
+                kwargs["request_timeout_sec"] = request_timeout_sec
+        return func(payload, **kwargs)
+
+    @staticmethod
+    def _remaining_timeout(request_timeout_sec: float | None, started_at: float) -> float | None:
+        if request_timeout_sec is None:
+            return None
+        remaining = float(request_timeout_sec) - (time.monotonic() - started_at)
+        return max(0.01, remaining)

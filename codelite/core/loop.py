@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import inspect
 import json
+import time
 from typing import Any
 
 from codelite.config import AppConfig
@@ -56,6 +58,8 @@ class AgentLoop:
         require_plan: bool = False,
         tool_router_override: ToolRouter | None = None,
         extra_system_messages: list[str] | None = None,
+        turn_timeout_sec: float | None = None,
+        timeout_error_message: str | None = None,
     ) -> str:
         active_tool_router = tool_router_override or self.tool_router
         scoped_tool_router = active_tool_router.for_session(session_id)
@@ -140,8 +144,17 @@ class AgentLoop:
         tools = scoped_tool_router.tool_schemas()
 
         plan_gate_active = bool(require_plan and self.config.runtime.auto_plan_enabled)
+        deadline_monotonic = (
+            time.monotonic() + float(turn_timeout_sec)
+            if turn_timeout_sec is not None and float(turn_timeout_sec) > 0
+            else None
+        )
 
         for step in range(1, self.config.runtime.max_steps + 1):
+            def emit_stream_event(payload: dict[str, Any]) -> None:
+                event_payload = {"step": step, **dict(payload)}
+                self.session_store.append_event(session_id, "model_stream", event_payload)
+
             if plan_gate_active:
                 if self._has_agent_todo_update(session_id):
                     plan_gate_active = False
@@ -164,6 +177,10 @@ class AgentLoop:
             )
 
             try:
+                request_timeout_sec = self._remaining_turn_timeout(
+                    deadline_monotonic=deadline_monotonic,
+                    timeout_error_message=timeout_error_message,
+                )
                 if self.resilience_runner is not None:
                     resilience_result = self.resilience_runner.complete(
                         messages=messages,
@@ -171,6 +188,9 @@ class AgentLoop:
                         preferred_profile=selected_profile.name if selected_profile is not None else "fast",
                         primary_client=self.model_client,
                         session_id=session_id,
+                        stream_handler=emit_stream_event,
+                        time_budget_sec=request_timeout_sec,
+                        timeout_error_message=timeout_error_message,
                     )
                     result = resilience_result.result
                     self.session_store.append_event(
@@ -179,7 +199,23 @@ class AgentLoop:
                         resilience_result.to_dict(),
                     )
                 else:
-                    result = self.model_client.complete(messages, tools)
+                    stream_complete = getattr(self.model_client, "stream_complete", None)
+                    if callable(stream_complete):
+                        emit_stream_event({"type": "reset"})
+                        result = self._stream_complete_with_optional_timeout(
+                            stream_complete,
+                            messages,
+                            tools,
+                            on_event=emit_stream_event,
+                            request_timeout_sec=request_timeout_sec,
+                        )
+                    else:
+                        result = self._complete_with_optional_timeout(
+                            self.model_client,
+                            messages,
+                            tools,
+                            request_timeout_sec=request_timeout_sec,
+                        )
             except Exception as exc:
                 if self.heart_service is not None:
                     self.heart_service.beat("agent_loop", status="yellow", last_error=str(exc))
@@ -201,6 +237,11 @@ class AgentLoop:
             )
 
             if result.tool_calls:
+                self.session_store.append_event(
+                    session_id,
+                    "model_stream",
+                    {"step": step, "type": "reset", "reason": "tool_calls"},
+                )
                 tool_calls_payload = [
                     {
                         "id": call.id,
@@ -305,6 +346,57 @@ class AgentLoop:
             "Planning gate: before mutating actions, call todo_write with 3-7 concrete steps, "
             "set exactly one item to in_progress, and mark completed items as done as you proceed."
         )
+
+    @staticmethod
+    def _remaining_turn_timeout(
+        *,
+        deadline_monotonic: float | None,
+        timeout_error_message: str | None,
+    ) -> float | None:
+        if deadline_monotonic is None:
+            return None
+        remaining = deadline_monotonic - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError(timeout_error_message or "turn timed out while waiting for model response")
+        return max(0.01, remaining)
+
+    @staticmethod
+    def _complete_with_optional_timeout(
+        client: ModelClient,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        *,
+        request_timeout_sec: float | None,
+    ) -> ModelResult:
+        complete = getattr(client, "complete")
+        kwargs: dict[str, Any] = {}
+        if request_timeout_sec is not None:
+            try:
+                parameters = inspect.signature(complete).parameters
+            except (TypeError, ValueError):
+                parameters = {}
+            if "request_timeout_sec" in parameters:
+                kwargs["request_timeout_sec"] = request_timeout_sec
+        return complete(messages, tools, **kwargs)
+
+    @staticmethod
+    def _stream_complete_with_optional_timeout(
+        stream_complete: Any,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        *,
+        on_event: Any,
+        request_timeout_sec: float | None,
+    ) -> ModelResult:
+        kwargs: dict[str, Any] = {"on_event": on_event}
+        if request_timeout_sec is not None:
+            try:
+                parameters = inspect.signature(stream_complete).parameters
+            except (TypeError, ValueError):
+                parameters = {}
+            if "request_timeout_sec" in parameters:
+                kwargs["request_timeout_sec"] = request_timeout_sec
+        return stream_complete(messages, tools, **kwargs)
 
     @staticmethod
     def _format_retrieval_results(results: list[dict[str, Any]]) -> str:

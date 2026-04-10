@@ -5,6 +5,7 @@ import json
 import shutil
 import uuid
 from contextlib import redirect_stdout
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -28,6 +29,34 @@ class SimpleShellModelClient:
     def complete(self, messages: list[dict[str, object]], tools: list[dict[str, object]]) -> ModelResult:
         del messages, tools
         return ModelResult(text="done", tool_calls=[])
+
+
+class TimeoutFailShellModelClient:
+    def __init__(self) -> None:
+        self.request_timeout_sec: float | None = None
+
+    def stream_complete(
+        self,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]],
+        *,
+        on_event: object | None = None,
+        request_timeout_sec: float | None = None,
+    ) -> ModelResult:
+        del messages, tools, on_event
+        self.request_timeout_sec = request_timeout_sec
+        rendered_timeout = "unknown"
+        if request_timeout_sec is not None:
+            rounded = round(float(request_timeout_sec), 3)
+            nearest_int = round(rounded)
+            rendered_timeout = (
+                str(int(nearest_int))
+                if abs(rounded - nearest_int) < 0.05
+                else f"{rounded:.3f}".rstrip("0").rstrip(".")
+            )
+        raise RuntimeError(
+            f"shell turn timed out after {rendered_timeout}s while waiting for model response"
+        )
 
 
 @pytest.fixture(autouse=True)
@@ -86,7 +115,7 @@ def test_shell_renderer_renders_welcome_panels() -> None:
     assert "directory: C:\\Users\\demo\\workspace" in rendered
     assert "Tip: New Build faster with Codex." not in rendered
     assert "Summarize recent commits" not in rendered
-    assert "100% left" in rendered
+    assert "100% left" not in rendered
     assert renderer.prompt(workspace_root="C:\\Users\\demo\\workspace", session_id="demo-session")
 
 
@@ -106,6 +135,26 @@ def test_shell_renderer_codex_live_input_is_compact() -> None:
     assert "█" in lines[0]
     assert "s:abcd" in lines[1]
     assert "L1/1:C" not in rendered
+
+
+def test_shell_renderer_codex_slash_palette_expands_on_prefix_even_if_focus_resets() -> None:
+    renderer = ShellRenderer(width=110)
+    model = ShellInputModel(
+        commands=[
+            ShellCommandSpec(name="plan", description="switch to planning mode"),
+            ShellCommandSpec(name="status", description="show runtime health"),
+        ],
+        mode=ShellMode.ACT,
+    )
+    model.set_buffer("/")
+    model.focus = ShellInputFocus.EDITOR
+
+    lines = renderer.render_live_input(model=model, workspace_name="test", session_id="demo-abcd")
+    rendered = "\n".join(lines)
+
+    assert "/plan" in rendered
+    assert "/status" in rendered
+    assert "Tab/Up/Down browse" in rendered
 
 
 def test_shell_renderer_renders_live_input_state() -> None:
@@ -319,7 +368,8 @@ def test_shell_renderer_renders_skill_palette_state() -> None:
     rendered = "\n".join(lines)
 
     assert "$1password" in rendered
-    assert "Press enter to insert or esc to close" in rendered
+    assert "Enter insert" in rendered
+    assert "Esc close" in rendered
 
 
 def test_shell_command_specs_use_chinese_descriptions() -> None:
@@ -613,9 +663,9 @@ def test_shell_run_turn_defaults_to_compact_post_turn_summary(workspace_dir: Pat
     assert "[ASSISTANT]" in output
     assert "[DONE] response ready" in output
     assert "[TASK]" not in output
-    assert "[RECV]" not in output
+    assert "[RECV]" in output
     assert "[RETR]" not in output
-    assert "[THINK]" not in output
+    assert "[THINK]" in output
     assert "done" in output
     assert "/view full" not in output
     assert "Tool Cards" not in output
@@ -624,6 +674,51 @@ def test_shell_run_turn_defaults_to_compact_post_turn_summary(workspace_dir: Pat
     assert "Task Board" not in output
     assert "Lock Board" not in output
     assert tasks
+
+
+def test_shell_run_turn_timeout_prints_error_and_skips_done(
+    workspace_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CODELITE_WORKSPACE_ROOT", str(workspace_dir))
+
+    services = build_runtime(workspace_dir, model_client=TimeoutFailShellModelClient())
+    services.config = replace(
+        services.config,
+        runtime=replace(services.config.runtime, shell_timeout_sec=1),
+    )
+    shell = CodeLiteShell(services)
+
+    stdout = io.StringIO()
+    with pytest.raises(RuntimeError, match="shell turn timed out after 1s while waiting for model response"):
+        with redirect_stdout(stdout):
+            shell._run_agent_turn("say hello slowly")
+
+    output = stdout.getvalue()
+
+    assert "[STATUS]" in output
+    assert "[THINK]" in output
+    assert "[ERR] shell turn timed out after 1s while waiting for model response" in output
+    assert "[DONE] response ready" not in output
+    assert "[ASSISTANT]" not in output
+    assert shell._submitted_live_prompt == ""
+    assert shell._assistant_live_text == ""
+    assert shell._turn_history[-1]["status"] == "error"
+
+
+def test_shell_live_turn_lines_keep_submitted_prompt_visible(workspace_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CODELITE_WORKSPACE_ROOT", str(workspace_dir))
+    shell = CodeLiteShell(build_runtime(workspace_dir, model_client=SimpleShellModelClient()))
+
+    shell._submitted_live_prompt = "hi"
+    shell._status_lines_current_turn = [shell.renderer.render_runtime_event("think", "thinking")]
+    shell._status_events_current_turn = [("think", "thinking")]
+
+    rendered = "\n".join(shell._render_live_turn_lines())
+
+    assert "> hi" in rendered
+    assert "[STATUS]" in rendered
+    assert "[THINK] thinking" in rendered
 
 
 def test_shell_view_command_switches_post_turn_density(workspace_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
