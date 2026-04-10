@@ -2097,30 +2097,67 @@ class CodeLiteShell:
         return match.group(0).strip()
 
     @staticmethod
-    @staticmethod
     def _prompt_has_plan_context(prompt: str) -> bool:
         text = prompt.strip()
         if not text:
             return False
         lowered = text.lower()
+        compact_text = re.sub(r"\s+", "", text)
         goal_markers = (
             "implement", "fix", "refactor", "design", "build", "upgrade", "migrate",
             "optimize", "debug", "add", "update", "modify", "change", "create", "write", "test",
+            "repair", "clean up", "investigate", "resolve", "ship", "improve", "lint", "validate",
         )
-        scope_markers = ("scope", "in scope", "out of scope", "boundary")
-        constraint_markers = ("constraint", "constraints", "must", "should", "compatible", "risk", "deadline")
-        output_markers = ("deliverable", "acceptance", "test", "milestone", "api", "interface", "output")
-        has_goal = any(marker in lowered for marker in goal_markers) or len(text.split()) >= 8
-        has_scope = any(marker in lowered for marker in scope_markers)
-        has_constraints = any(marker in lowered for marker in constraint_markers)
-        has_output = any(marker in lowered for marker in output_markers)
-        has_structure = "\n" in text or any(token in text for token in (":", ";", ","))
-        has_file_ref = bool(re.search(r"[A-Za-z0-9_./\\-]+\.[A-Za-z0-9_]+", text))
+        goal_markers_zh = (
+            "修复", "新增", "优化", "重构", "实现", "排查", "更新", "修改", "调整", "补", "恢复", "处理", "通过",
+            "测试", "验证", "整理", "兼容", "回滚", "方案",
+        )
+        scope_markers = ("scope", "in scope", "out of scope", "boundary", "only", "within", "limited to")
+        scope_markers_zh = ("范围", "仅限", "限定", "只改", "只在", "仅改", "只做")
+        constraint_markers = (
+            "constraint", "constraints", "must", "should", "compatible", "risk", "deadline",
+            "without", "keep", "rollback", "acceptance", "validation", "preserve",
+        )
+        constraint_markers_zh = ("必须", "需要", "保持", "兼容", "风险", "回滚", "验收", "验证", "不要", "不能", "保留")
+        output_markers = (
+            "deliverable", "acceptance", "test", "tests", "milestone", "api", "interface", "output",
+            "validate", "lint", "build", "pytest", "compileall",
+        )
+        output_markers_zh = ("测试", "用例", "验收", "验证", "接口", "输出", "命令", "回归", "构建")
+        code_markers = (
+            "file", "files", "module", "function", "class", "cli", "ui", "prompt", "command",
+            "session", "renderer", "shell", "memory", "worktree", "bug", "error", "regression",
+        )
+        code_markers_zh = ("文件", "模块", "函数", "类", "路径", "命令", "界面", "提示", "会话", "工作区", "上下文", "记忆", "错误")
+        has_goal = any(marker in lowered for marker in goal_markers) or any(marker in text for marker in goal_markers_zh)
+        has_scope = any(marker in lowered for marker in scope_markers) or any(marker in text for marker in scope_markers_zh)
+        has_constraints = any(marker in lowered for marker in constraint_markers) or any(marker in text for marker in constraint_markers_zh)
+        has_output = any(marker in lowered for marker in output_markers) or any(marker in text for marker in output_markers_zh)
+        has_code_context = any(marker in lowered for marker in code_markers) or any(marker in text for marker in code_markers_zh)
+        has_structure = "\n" in text or any(token in text for token in (":", ";", ",", "：", "；", "，", "、"))
+        has_file_ref = bool(re.search(r"(?:[A-Za-z0-9_.-]+[\\/])+[A-Za-z0-9_.-]+|\b[A-Za-z0-9_.-]+\.[A-Za-z0-9_]+\b", text))
         has_backticks = "`" in text
-        detail_score = int(has_scope) + int(has_constraints) + int(has_output) + int(has_structure) + int(has_file_ref) + int(has_backticks)
+        strong_signals = has_file_ref or has_backticks or "tests/" in text or "tests\\" in text or "codelite/" in text or "codelite\\" in text
+        detail_score = (
+            int(has_scope)
+            + int(has_constraints)
+            + int(has_output)
+            + int(has_structure)
+            + int(has_file_ref)
+            + int(has_backticks)
+            + int(has_code_context)
+        )
         if len(text) >= 120 and has_goal:
             return True
-        return has_goal and detail_score >= 1
+        if strong_signals and has_goal:
+            return True
+        if has_goal and len(compact_text) >= 18 and detail_score >= 2:
+            return True
+        if has_goal and len(compact_text) >= 24 and detail_score >= 1:
+            return True
+        if has_goal and has_code_context and len(text.split()) >= 4:
+            return True
+        return False
 
     def _needs_plan_clarification(self, prompt: str) -> bool:
         text = prompt.strip()
@@ -2133,10 +2170,14 @@ class CodeLiteShell:
         if self._prompt_has_plan_context(text):
             return False
         lowered = text.lower()
-        ambiguous_markers = ("help", "figure out", "something", "this thing", "quickly do", "do one thing")
-        if any(marker in lowered for marker in ambiguous_markers):
-            return True
         compact_text = re.sub(r"\s+", "", text)
+        ambiguous_markers = (
+            "optimize this", "fix this", "improve this", "figure out", "something", "this thing",
+            "do one thing", "plan this", "help with this", "quickly do",
+        )
+        ambiguous_markers_zh = ("优化一下", "搞一下", "看一下", "弄一下", "处理一下", "这个流程", "这个问题", "这个东西", "规划一下")
+        if any(marker in lowered for marker in ambiguous_markers) or any(marker in text for marker in ambiguous_markers_zh):
+            return True
         return len(compact_text) <= 12
 
     def _build_plan_clarification_questions(self, prompt: str) -> list[dict[str, Any]]:
@@ -2661,28 +2702,7 @@ class CodeLiteShell:
         return len(lines)
 
     def _render_live_turn_lines(self) -> list[str]:
-
-        waiting_model = ShellInputModel(
-            commands=self._command_specs(),
-            skills=self._skill_specs(),
-            mode=self.mode,
-        )
-        if self._submitted_live_prompt:
-            waiting_model.set_buffer(self._submitted_live_prompt)
-
-        lines = self.renderer.render_live_input(
-
-            model=waiting_model,
-
-            workspace_name=self.services.layout.workspace_root.name,
-
-            session_id=self.session_id,
-
-            runtime_summary=self._runtime_status_summary(),
-
-            hint="",
-
-        )
+        lines = self._render_submitted_prompt_snapshot(include_cursor=True)
 
         lines.extend(self.renderer.render_status_block(self._status_display_lines()).splitlines())
 
@@ -2691,6 +2711,25 @@ class CodeLiteShell:
             lines.extend(self.renderer.render_assistant_output(self._assistant_live_text).splitlines())
 
         return lines
+
+    def _render_submitted_prompt_snapshot(self, *, include_cursor: bool) -> list[str]:
+        waiting_model = ShellInputModel(
+            commands=self._command_specs(),
+            skills=self._skill_specs(),
+            mode=self.mode,
+        )
+        if self._submitted_live_prompt:
+            waiting_model.set_buffer(self._submitted_live_prompt)
+        lines = self.renderer.render_live_input(
+            model=waiting_model,
+            workspace_name=self.services.layout.workspace_root.name,
+            session_id=self.session_id,
+            runtime_summary=self._runtime_status_summary(),
+            hint="",
+        )
+        if include_cursor:
+            return lines
+        return [line.replace("█", "") for line in lines]
 
     def _refresh_live_turn_display(self) -> None:
 
@@ -3354,6 +3393,8 @@ class CodeLiteShell:
             return
         if self._live_turn_active:
             self._clear_live_turn_display()
+        if self._submitted_live_prompt:
+            print("\n".join(self._render_submitted_prompt_snapshot(include_cursor=False)))
         print(self.renderer.render_status_block(self._status_display_lines()))
 
     def _describe_runtime_event(self, event: dict[str, Any]) -> tuple[str, str, str] | None:

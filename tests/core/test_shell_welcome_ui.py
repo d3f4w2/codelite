@@ -658,6 +658,7 @@ def test_shell_run_turn_defaults_to_compact_post_turn_summary(workspace_dir: Pat
     tasks = services.task_store.list_tasks()
 
     assert "[USER]" not in output
+    assert "summarize current task" in output
     assert "[STATUS]" in output
     assert output.count("[STATUS]") == 1
     assert "[ASSISTANT]" in output
@@ -696,6 +697,7 @@ def test_shell_run_turn_timeout_prints_error_and_skips_done(
 
     output = stdout.getvalue()
 
+    assert "say hello slowly" in output
     assert "[STATUS]" in output
     assert "[THINK]" in output
     assert "[ERR] shell turn timed out after 1s while waiting for model response" in output
@@ -941,6 +943,8 @@ def test_shell_plan_clarification_only_when_context_insufficient(workspace_dir: 
 
     assert shell._needs_plan_clarification("optimize this") is True
     assert shell._needs_plan_clarification("帮我优化一下这个流程") is True
+    assert shell._needs_plan_clarification("help me fix lint errors") is False
+    assert shell._needs_plan_clarification("修复 lint 错误并运行 validate") is False
     assert shell._needs_plan_clarification("为 codelite/cli.py 新增计划确认门并补 tests/core/test_shell_welcome_ui.py") is False
     assert (
         shell._needs_plan_clarification(
