@@ -2097,12 +2097,289 @@ class CodeLiteShell:
         return match.group(0).strip()
 
     @staticmethod
-    def _prompt_has_plan_context(prompt: str) -> bool:
+    def _plan_prompt_signals(prompt: str) -> dict[str, Any]:
         text = prompt.strip()
         if not text:
-            return False
+            return {
+                "text": "",
+                "lowered": "",
+                "compact_text": "",
+                "has_greeting": False,
+                "has_question": False,
+                "has_direct_answer_marker": False,
+                "has_plan_word": False,
+                "has_goal": False,
+                "has_scope": False,
+                "has_constraints": False,
+                "has_output": False,
+                "has_code_context": False,
+                "has_structure": False,
+                "has_file_ref": False,
+                "has_backticks": False,
+                "strong_signals": False,
+            }
         lowered = text.lower()
         compact_text = re.sub(r"\s+", "", text)
+        greeting_markers = {
+            "hi", "hello", "hey", "yo", "hiya", "sup", "你好", "您好", "嗨", "哈喽", "在吗",
+            "早", "早上好", "中午好", "下午好", "晚上好",
+        }
+        question_starters = (
+            "what", "why", "how", "when", "where", "who", "which", "explain", "tell me", "summarize",
+            "介绍", "解释", "说明", "总结", "是什么", "什么意思", "怎么", "如何", "为什么", "谁", "哪里", "哪个",
+        )
+        plan_words = ("plan", "planning", "方案", "规划", "计划")
+        goal_markers = (
+            "implement", "fix", "refactor", "design", "build", "upgrade", "migrate", "optimize", "debug",
+            "add", "update", "modify", "change", "create", "write", "test", "repair", "clean up",
+            "investigate", "resolve", "ship", "improve", "lint", "validate",
+            "修复", "新增", "优化", "重构", "实现", "排查", "更新", "修改", "调整", "恢复", "处理", "通过",
+            "测试", "验证", "整理", "兼容",
+        )
+        scope_markers = (
+            "scope", "in scope", "out of scope", "boundary", "only", "within", "limited to",
+            "范围", "仅限", "限定", "只改", "只在", "仅改", "只做",
+        )
+        constraint_markers = (
+            "constraint", "constraints", "must", "should", "compatible", "risk", "deadline",
+            "without", "keep", "rollback", "acceptance", "validation", "preserve",
+            "必须", "需要", "保持", "兼容", "风险", "回滚", "验收", "验证", "不要", "不能", "保留",
+        )
+        output_markers = (
+            "deliverable", "acceptance", "test", "tests", "milestone", "api", "interface", "output",
+            "validate", "lint", "build", "pytest", "compileall",
+            "测试", "用例", "验收", "接口", "输出", "命令", "回归", "构建",
+        )
+        code_markers = (
+            "file", "files", "module", "function", "class", "cli", "ui", "prompt", "command", "session",
+            "renderer", "shell", "memory", "worktree", "bug", "error", "regression", "diff", "patch",
+            "文件", "模块", "函数", "类", "路径", "命令", "界面", "提示", "会话", "工作区", "上下文", "记忆", "错误",
+        )
+        has_greeting = compact_text.lower() in greeting_markers or text.lower() in greeting_markers
+        has_question = any(token in text for token in ("?", "？")) or lowered.startswith(question_starters)
+        has_direct_answer_marker = any(starter in lowered for starter in question_starters) or any(
+            starter in text for starter in question_starters if not starter.isascii()
+        )
+        has_plan_word = any(marker in lowered for marker in plan_words) or any(
+            marker in text for marker in plan_words if not marker.isascii()
+        )
+        has_goal = any(marker in lowered for marker in goal_markers if marker.isascii()) or any(
+            marker in text for marker in goal_markers if not marker.isascii()
+        )
+        has_scope = any(marker in lowered for marker in scope_markers if marker.isascii()) or any(
+            marker in text for marker in scope_markers if not marker.isascii()
+        )
+        has_constraints = any(marker in lowered for marker in constraint_markers if marker.isascii()) or any(
+            marker in text for marker in constraint_markers if not marker.isascii()
+        )
+        has_output = any(marker in lowered for marker in output_markers if marker.isascii()) or any(
+            marker in text for marker in output_markers if not marker.isascii()
+        )
+        has_code_context = any(marker in lowered for marker in code_markers if marker.isascii()) or any(
+            marker in text for marker in code_markers if not marker.isascii()
+        )
+        has_structure = "\n" in text or any(token in text for token in (":", ";", ",", "：", "；", "，", "、"))
+        has_file_ref = bool(re.search(r"(?:[A-Za-z0-9_.-]+[\\/])+[A-Za-z0-9_.-]+|\b[A-Za-z0-9_.-]+\.[A-Za-z0-9_]+\b", text))
+        has_backticks = "`" in text
+        strong_signals = has_file_ref or has_backticks or "tests/" in text or "tests\\" in text or "codelite/" in text or "codelite\\" in text
+        return {
+            "text": text,
+            "lowered": lowered,
+            "compact_text": compact_text,
+            "has_greeting": has_greeting,
+            "has_question": has_question,
+            "has_direct_answer_marker": has_direct_answer_marker,
+            "has_plan_word": has_plan_word,
+            "has_goal": has_goal,
+            "has_scope": has_scope,
+            "has_constraints": has_constraints,
+            "has_output": has_output,
+            "has_code_context": has_code_context,
+            "has_structure": has_structure,
+            "has_file_ref": has_file_ref,
+            "has_backticks": has_backticks,
+            "strong_signals": strong_signals,
+        }
+
+    @classmethod
+    def _classify_plan_prompt_intent(cls, prompt: str) -> dict[str, Any]:
+        signals = cls._plan_prompt_signals(prompt)
+        text = str(signals["text"])
+        lowered = str(signals["lowered"])
+        compact_text = str(signals["compact_text"])
+        if not text:
+            return {"intent": "direct_answer", "missing_dimensions": []}
+        if bool(signals["has_greeting"]):
+            return {"intent": "greeting", "missing_dimensions": []}
+
+        detail_score = (
+            int(bool(signals["has_scope"]))
+            + int(bool(signals["has_constraints"]))
+            + int(bool(signals["has_output"]))
+            + int(bool(signals["has_structure"]))
+            + int(bool(signals["has_file_ref"]))
+            + int(bool(signals["has_backticks"]))
+            + int(bool(signals["has_code_context"]))
+        )
+        has_plan_context = False
+        if len(text) >= 120 and bool(signals["has_goal"]):
+            has_plan_context = True
+        elif bool(signals["strong_signals"]) and bool(signals["has_goal"]):
+            has_plan_context = True
+        elif bool(signals["has_goal"]) and len(compact_text) >= 18 and detail_score >= 2:
+            has_plan_context = True
+        elif bool(signals["has_goal"]) and len(compact_text) >= 24 and detail_score >= 1:
+            has_plan_context = True
+        elif bool(signals["has_goal"]) and bool(signals["has_code_context"]) and len(text.split()) >= 4:
+            has_plan_context = True
+
+        if has_plan_context:
+            return {"intent": "clear_plan_request", "missing_dimensions": []}
+
+        direct_answer = False
+        if bool(signals["has_direct_answer_marker"]) and not bool(signals["has_goal"]) and not bool(signals["has_plan_word"]):
+            direct_answer = True
+        elif bool(signals["has_question"]) and len(compact_text) <= 40 and not bool(signals["has_goal"]) and not bool(signals["has_plan_word"]):
+            direct_answer = True
+        elif len(compact_text) <= 12 and not bool(signals["has_goal"]) and not bool(signals["has_plan_word"]):
+            direct_answer = True
+
+        if direct_answer:
+            return {"intent": "direct_answer", "missing_dimensions": []}
+
+        ambiguous_markers = (
+            "optimize this", "fix this", "improve this", "figure out", "something", "this thing",
+            "do one thing", "plan this", "help with this", "quickly do",
+            "优化一下", "搞一下", "看一下", "弄一下", "处理一下", "这个流程", "这个问题", "这个东西", "规划一下",
+        )
+        missing_dimensions: list[str] = []
+        if not bool(signals["has_goal"]):
+            missing_dimensions.append("goal")
+        if not bool(signals["has_scope"]) and not bool(signals["strong_signals"]):
+            missing_dimensions.append("scope")
+        if not bool(signals["has_constraints"]) and not bool(signals["has_output"]):
+            missing_dimensions.append("validation")
+        if not missing_dimensions:
+            missing_dimensions.append("goal")
+
+        if any(marker in lowered for marker in ambiguous_markers if marker.isascii()) or any(
+            marker in text for marker in ambiguous_markers if not marker.isascii()
+        ):
+            return {"intent": "ambiguous_plan_request", "missing_dimensions": missing_dimensions[:2]}
+        if bool(signals["has_plan_word"]) or bool(signals["has_goal"]) or bool(signals["has_code_context"]):
+            return {"intent": "ambiguous_plan_request", "missing_dimensions": missing_dimensions[:2]}
+        return {"intent": "direct_answer", "missing_dimensions": []}
+
+    @classmethod
+    def _prompt_has_plan_context(cls, prompt: str) -> bool:
+        return cls._classify_plan_prompt_intent(prompt).get("intent") == "clear_plan_request"
+
+    def _needs_plan_clarification(self, prompt: str) -> bool:
+        text = prompt.strip()
+        if self.mode is not ShellMode.PLAN:
+            return False
+        if not text or text.startswith("/"):
+            return False
+        if self._contains_proposed_plan(text):
+            return False
+        intent = str(self._classify_plan_prompt_intent(text).get("intent", "direct_answer"))
+        return intent == "ambiguous_plan_request"
+
+    def _build_plan_clarification_questions(self, prompt: str) -> list[dict[str, Any]]:
+        classification = self._classify_plan_prompt_intent(prompt)
+        if classification.get("intent") != "ambiguous_plan_request":
+            return []
+        missing_dimensions = list(classification.get("missing_dimensions", []))
+        questions: list[dict[str, Any]] = []
+        for dimension in missing_dimensions:
+            if dimension == "goal":
+                questions.append(
+                    {
+                        "question": "Which primary outcome should this plan optimize for?",
+                        "options": [
+                            "Ship a correct implementation with clear acceptance criteria",
+                            "Prioritize speed with a minimal viable solution",
+                            "Prioritize robustness with extra risk controls",
+                        ],
+                    }
+                )
+            elif dimension == "scope":
+                questions.append(
+                    {
+                        "question": "What scope should this plan cover first?",
+                        "options": [
+                            "Cover the most relevant file or module first",
+                            "Plan the end-to-end change across the workspace",
+                            "Start with investigation and narrow scope before implementation",
+                        ],
+                    }
+                )
+            elif dimension == "validation":
+                questions.append(
+                    {
+                        "question": "What completion bar should this plan assume?",
+                        "options": [
+                            "Run targeted tests only",
+                            "Run the unified validation pipeline",
+                            "Include rollback and extra risk checks before finishing",
+                        ],
+                    }
+                )
+        return questions[:2]
+
+    def _maybe_start_plan_clarification(self, raw: str) -> bool:
+        if self._pending_plan_clarification is not None:
+            return False
+        if not self._needs_plan_clarification(raw):
+            return False
+        questions = self._build_plan_clarification_questions(raw)
+        if not questions:
+            return False
+        self._pending_plan_clarification = {
+            "base_prompt": raw.strip(),
+            "questions": questions,
+            "answers": [],
+            "cursor": 0,
+        }
+        print("Need a little more plan detail before execution. Please choose one option per question.")
+        self._print_current_clarification_question()
+        return True
+
+    def _print_current_clarification_question(self) -> None:
+        pending = self._pending_plan_clarification
+        if pending is None:
+            return
+        questions = list(pending.get("questions", []))
+        cursor = int(pending.get("cursor", 0))
+        if cursor < 0 or cursor >= len(questions):
+            return
+        item = dict(questions[cursor])
+        options = list(item.get("options", []))
+        print(f"Question {cursor + 1}/{len(questions)}")
+        print(item.get("question", ""))
+        for index, option in enumerate(options, start=1):
+            print(f"  {index}. {option}")
+        print("Reply with: <number> [optional note]")
+
+    @staticmethod
+    def _parse_clarification_selection(raw: str) -> tuple[int | None, str]:
+        text = raw.strip()
+        if not text:
+            return None, ""
+        candidate = text
+        note = ""
+        if "\t" in candidate:
+            head, tail = candidate.split("\t", 1)
+            candidate = head.strip()
+            note = tail.strip()
+        else:
+            parts = candidate.split(maxsplit=1)
+            candidate = parts[0].strip() if parts else ""
+            note = parts[1].strip() if len(parts) > 1 else ""
+        if not candidate.isdigit():
+            return None, ""
+        return int(candidate), note
+
         goal_markers = (
             "implement", "fix", "refactor", "design", "build", "upgrade", "migrate",
             "optimize", "debug", "add", "update", "modify", "change", "create", "write", "test",
@@ -2159,7 +2436,7 @@ class CodeLiteShell:
             return True
         return False
 
-    def _needs_plan_clarification(self, prompt: str) -> bool:
+    def _legacy_needs_plan_clarification_v2_unused(self, prompt: str) -> bool:
         text = prompt.strip()
         if self.mode is not ShellMode.PLAN:
             return False
@@ -2180,7 +2457,7 @@ class CodeLiteShell:
             return True
         return len(compact_text) <= 12
 
-    def _build_plan_clarification_questions(self, prompt: str) -> list[dict[str, Any]]:
+    def _legacy_build_plan_clarification_questions_v2_unused(self, prompt: str) -> list[dict[str, Any]]:
         _ = prompt
         return [
             {
@@ -2209,7 +2486,7 @@ class CodeLiteShell:
             },
         ]
 
-    def _maybe_start_plan_clarification(self, raw: str) -> bool:
+    def _legacy_maybe_start_plan_clarification_v2_unused(self, raw: str) -> bool:
         if self._pending_plan_clarification is not None:
             return False
         if not self._needs_plan_clarification(raw):
@@ -2225,7 +2502,7 @@ class CodeLiteShell:
         self._print_current_clarification_question()
         return True
 
-    def _print_current_clarification_question(self) -> None:
+    def _legacy_print_current_clarification_question_v2_unused(self) -> None:
         pending = self._pending_plan_clarification
         if pending is None:
             return
@@ -2242,7 +2519,7 @@ class CodeLiteShell:
         print("Reply with: <number> [optional note]")
 
     @staticmethod
-    def _parse_clarification_selection(raw: str) -> tuple[int | None, str]:
+    def _legacy_parse_clarification_selection_v2_unused(raw: str) -> tuple[int | None, str]:
         text = raw.strip()
         if not text:
             return None, ""
@@ -2779,8 +3056,14 @@ class CodeLiteShell:
         if len(self._live_notifications) > 6:
             self._live_notifications = self._live_notifications[-6:]
 
-    def _agent_prompt(self, raw: str) -> str:
+    def _agent_prompt(self, raw: str, *, force_plan_mode: bool = False) -> str:
         prefix = self.mode.guidance_prefix
+        if self.mode is ShellMode.PLAN:
+            if force_plan_mode:
+                return raw if not prefix else prefix + raw
+            intent = str(self._classify_plan_prompt_intent(raw).get("intent", "clear_plan_request"))
+            if intent in {"greeting", "direct_answer"}:
+                return raw
         return raw if not prefix else prefix + raw
 
     def _turn_task_id(self, turn_index: int) -> str:
@@ -2840,6 +3123,7 @@ class CodeLiteShell:
         decision: AutoOrchestrationDecision,
         turn_timeout_sec: float | None = None,
         timeout_error_message: str | None = None,
+        force_plan_prompt: bool = False,
     ) -> str:
         if self.services.worktree_manager is None:
             raise RuntimeError("worktree manager unavailable")
@@ -2863,7 +3147,7 @@ class CodeLiteShell:
             memory_runtime=self.services.memory_runtime,
             hook_runtime=self.services.hook_runtime,
         )
-        prompt = self._agent_prompt(raw)
+        prompt = self._agent_prompt(raw, force_plan_mode=force_plan_prompt)
         title = decision.task_title_hint or (cleaned[:80] or task_id)
         lane_payload = self.services.lane_scheduler.execute_sync(
             "main",
@@ -2897,7 +3181,7 @@ class CodeLiteShell:
         )
         return str(result.get("answer", ""))
 
-    def _run_agent_turn(self, raw: str) -> None:
+    def _run_agent_turn(self, raw: str, *, force_plan_prompt: bool = False) -> None:
         turn_started_at = time.monotonic()
         cleaned = raw.strip()
         if cleaned:
@@ -2956,12 +3240,13 @@ class CodeLiteShell:
                             decision=decision,
                             turn_timeout_sec=turn_timeout_sec,
                             timeout_error_message=timeout_error_message,
+                            force_plan_prompt=force_plan_prompt,
                         )
                     )
                 else:
                     answer = self._run_with_optional_spinner(
                         lambda: self._run_agent_loop_turn(
-                            self._agent_prompt(raw),
+                            self._agent_prompt(raw, force_plan_mode=force_plan_prompt),
                             require_plan=decision.require_plan,
                             turn_timeout_sec=turn_timeout_sec,
                             timeout_error_message=timeout_error_message,
@@ -4149,7 +4434,7 @@ class CodeLiteShell:
             self.mode = ShellMode.PLAN
             print(self.mode.status_text)
             if args:
-                self._run_agent_turn(" ".join(args).strip())
+                self._run_agent_turn(" ".join(args).strip(), force_plan_prompt=True)
             return True
         if command in {"act", "accept"}:
             self.mode = ShellMode.ACT
@@ -4162,7 +4447,10 @@ class CodeLiteShell:
                 self.mode = ShellMode(args[0].lower())
                 if len(args) > 1:
                     print(self.mode.status_text)
-                    self._run_agent_turn(" ".join(args[1:]).strip())
+                    self._run_agent_turn(
+                        " ".join(args[1:]).strip(),
+                        force_plan_prompt=self.mode is ShellMode.PLAN,
+                    )
                     return True
             print(self.mode.status_text)
             return True

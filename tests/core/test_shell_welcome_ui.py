@@ -860,6 +860,8 @@ def test_shell_plan_mode_wraps_agent_prompt(workspace_dir: Path) -> None:
 
     assert wrapped.startswith("[shell-mode=plan]")
     assert wrapped.endswith("fix lint")
+    assert shell._agent_prompt("hi") == "hi"
+    assert shell._agent_prompt("这个错误是什么意思？") == "这个错误是什么意思？"
 
 
 def test_shell_plan_turn_sets_pending_confirmation_on_proposed_plan(
@@ -941,6 +943,9 @@ def test_shell_plan_clarification_only_when_context_insufficient(workspace_dir: 
     shell = CodeLiteShell(build_runtime(workspace_dir))
     shell.mode = ShellMode.PLAN
 
+    assert shell._needs_plan_clarification("hi") is False
+    assert shell._needs_plan_clarification("hello") is False
+    assert shell._needs_plan_clarification("这个错误是什么意思？") is False
     assert shell._needs_plan_clarification("optimize this") is True
     assert shell._needs_plan_clarification("帮我优化一下这个流程") is True
     assert shell._needs_plan_clarification("help me fix lint errors") is False
@@ -953,6 +958,29 @@ def test_shell_plan_clarification_only_when_context_insufficient(workspace_dir: 
         )
         is False
     )
+
+
+def test_shell_plan_clarification_questions_follow_missing_dimensions(workspace_dir: Path) -> None:
+    shell = CodeLiteShell(build_runtime(workspace_dir))
+    shell.mode = ShellMode.PLAN
+
+    questions = shell._build_plan_clarification_questions("优化一下这个流程")
+
+    assert 1 <= len(questions) <= 2
+    assert all(str(item.get("question", "")).strip() for item in questions)
+    assert all(2 <= len(list(item.get("options", []))) <= 3 for item in questions)
+
+
+def test_shell_plan_clarification_does_not_start_for_greeting_or_direct_answer(
+    workspace_dir: Path,
+) -> None:
+    shell = CodeLiteShell(build_runtime(workspace_dir))
+    shell.mode = ShellMode.PLAN
+
+    assert shell._maybe_start_plan_clarification("hi") is False
+    assert shell._pending_plan_clarification is None
+    assert shell._maybe_start_plan_clarification("这个错误是什么意思？") is False
+    assert shell._pending_plan_clarification is None
 
 
 def test_shell_plan_clarification_accepts_tab_appended_note(
