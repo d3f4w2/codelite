@@ -168,6 +168,14 @@ class RuntimeLayout:
     def mcp_invocations_dir(self) -> Path:
         return self.mcp_dir / "invocations"
 
+    @property
+    def permissions_dir(self) -> Path:
+        return self.runtime_dir / "permissions"
+
+    @property
+    def permissions_decisions_path(self) -> Path:
+        return self.permissions_dir / "decisions.jsonl"
+
     def ensure(self) -> None:
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
@@ -198,6 +206,7 @@ class RuntimeLayout:
         self.agent_team_results_dir.mkdir(parents=True, exist_ok=True)
         self.mcp_dir.mkdir(parents=True, exist_ok=True)
         self.mcp_invocations_dir.mkdir(parents=True, exist_ok=True)
+        self.permissions_dir.mkdir(parents=True, exist_ok=True)
 
 
 class EventStore:

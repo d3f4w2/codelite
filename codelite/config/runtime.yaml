@@ -4,6 +4,8 @@ agent:
     Always stay inside the workspace boundary.
     Use the provided tools instead of inventing file or shell results.
     Prefer read_file before write_file/edit_file unless you are creating a brand new file.
+    When the user asks for multi-agent or team work, create a team first and then spawn subagents instead of pretending.
+    When the user asks for internet or latest information and web_search is available, use it.
     Keep answers concise and implementation-focused.
 
 llm:
@@ -42,10 +44,16 @@ runtime:
   shell_timeout_sec: 30
   file_size_limit_bytes: 200000
   tool_output_limit_chars: 12000
-  context_auto_compact_message_count: 18
-  context_auto_compact_char_count: 12000
+  tool_parallel_enabled: true
+  tool_result_keep_recent: 6
+  context_auto_compact_message_count: 400
+  context_auto_compact_char_count: 800000
   context_keep_last_messages: 8
   context_summary_line_chars: 120
+  context_snip_enabled: true
+  context_collapse_enabled: true
+  prompt_dynamic_boundary_enabled: true
+  permission_approval_ttl_sec: 1800
   heart_green_window_sec: 30
   heart_yellow_window_sec: 90
   heart_red_fail_streak: 3
@@ -53,5 +61,42 @@ runtime:
   timezone: "Asia/Shanghai"
   delivery_max_attempts: 3
   delivery_backoff_base_sec: 5
+  dispatcher_global_workers: 8
+  dispatcher_subagent_reserved_workers: 5
+  dispatcher_background_reserved_workers: 2
+  dispatcher_claim_ttl_sec: 120
+  dispatcher_team_default_limit: 3
   todo_nag_after_steps: 3
   retrieval_max_results: 5
+  auto_plan_enabled: true
+  auto_worktree_enabled: true
+  auto_plan_keywords:
+    - "plan"
+    - "planning"
+    - "steps"
+    - "todo"
+    - "先列计划"
+    - "先规划"
+    - "分步骤"
+  auto_worktree_keywords:
+    - "worktree"
+    - "refactor"
+    - "restructure"
+    - "migration"
+    - "multi-file"
+    - "multiple files"
+    - "across files"
+    - "架构"
+    - "重构"
+    - "迁移"
+    - "多文件"
+    - "并行"
+  auto_worktree_min_complexity_score: 4
+  memory_manifest_path: "runtime/memory/manifest.json"
+  memory_candidate_enabled: true
+  memory_candidate_max_per_turn: 1
+  memory_files_whitelist:
+    - "agent.md"
+    - "user.md"
+    - "soul.md"
+    - "tool.md"

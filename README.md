@@ -6,3 +6,34 @@
 此外，对于命令行，要充分体现个性化，定制化，可视化的原则。这是本项目的核心.
 现在请参照这些来进行构思，实际资料，我会在后续提供给你
 参考实现参考，要求参考文档，必要时参考claudecode源码
+
+## 当前 CLI 形态
+
+- `codelite`
+  直接进入交互式 shell，显示欢迎面板、运行态摘要、最近活动和 slash 本地命令。
+- `codelite 修复 validate pipeline`
+  不必显式输入 `run`，裸 prompt 会直接作为单轮 agent 任务执行。
+- `codelite shell --label MyAgent`
+  可以覆盖 shell 标题和 prompt 前缀，方便做个性化演示。
+
+## Shell 内置命令
+
+- `/help`
+- `/plan`
+- `/act`
+- `/mode`
+- `/status`
+- `/session`
+- `/replay 3`
+- `/todo`
+- `/context`
+- `/memory`
+- `/new`
+- `/clear`
+- `/exit`
+
+## 交互体验
+
+- 在 Windows PowerShell / Windows Terminal 中，直接输入 `codelite` 就会进入对话式 shell。
+- 输入 `/` 会弹出可用命令列表。
+- 按 `Shift+Tab` 可以在 `plan` 和 `act` 两种模式之间循环切换。

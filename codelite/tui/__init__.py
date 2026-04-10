@@ -1,3 +1,33 @@
-from .shell import ShellRenderer, ShellWelcomeData
+from .shell import (
+    LockBoardData,
+    QueueBoardData,
+    ShellCommandSpec,
+    ShellInputFocus,
+    ShellInputModel,
+    ShellMode,
+    ShellRenderer,
+    ShellWelcomeData,
+    SubagentCardData,
+    TaskBoardData,
+    TeamBoardData,
+    TimelineGroupData,
+    ToolCardData,
+    TodoBoardData,
+)
 
-__all__ = ["ShellRenderer", "ShellWelcomeData"]
+__all__ = [
+    "LockBoardData",
+    "QueueBoardData",
+    "ShellCommandSpec",
+    "ShellInputFocus",
+    "ShellInputModel",
+    "ShellMode",
+    "ShellRenderer",
+    "ShellWelcomeData",
+    "SubagentCardData",
+    "TaskBoardData",
+    "TeamBoardData",
+    "TimelineGroupData",
+    "ToolCardData",
+    "TodoBoardData",
+]

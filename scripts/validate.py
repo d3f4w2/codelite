@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 from codelite.core.validate_pipeline import ValidatePipeline
@@ -10,6 +11,11 @@ from codelite.storage.events import RuntimeLayout
 
 
 def main(argv: list[str] | None = None) -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(errors="replace")
+
     parser = argparse.ArgumentParser(description="Run the CodeLite validate pipeline")
     parser.add_argument("--pytest-target", default="tests/core", help="pytest target for the test stage")
     parser.add_argument("--json", action="store_true", help="print JSON")

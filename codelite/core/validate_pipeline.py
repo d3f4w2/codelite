@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable
 
+from codelite.core.failure_trace import append_validation_failure
 from codelite.hooks import HookRuntime
 from codelite.storage.events import utc_now
 
@@ -76,12 +77,20 @@ class ValidatePipeline:
             )
             results.append(normalized)
             if not normalized.ok:
+                trace_path = append_validation_failure(
+                    self.workspace_root,
+                    stage=normalized.stage,
+                    command=normalized.command,
+                    exit_code=normalized.exit_code,
+                    output=normalized.output,
+                )
                 if self.hook_runtime is not None:
                     self.hook_runtime.on_validation_fail(normalized.to_dict())
                 return {
                     "generated_at": utc_now(),
                     "ok": False,
                     "stages": [item.to_dict() for item in results],
+                    "failure_trace_path": str(trace_path),
                 }
         return {
             "generated_at": utc_now(),

@@ -243,6 +243,16 @@ class TaskStore:
                 expired.append(lease)
         return expired
 
+    def list_active_leases(self, *, now: datetime | None = None) -> list[LeaseRecord]:
+        checkpoint = now or datetime.now(timezone.utc)
+        active: list[LeaseRecord] = []
+        for path in sorted(self.layout.leases_dir.glob("*.lock")):
+            with path.open("r", encoding="utf-8") as handle:
+                lease = LeaseRecord(**json.load(handle))
+            if _parse_utc(lease.expires_at) > checkpoint:
+                active.append(lease)
+        return active
+
     def reconcile_expired_leases(self, *, now: datetime | None = None) -> list[TaskRecord]:
         reconciled: list[TaskRecord] = []
         for lease in self.list_expired_leases(now=now):

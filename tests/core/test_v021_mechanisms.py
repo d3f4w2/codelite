@@ -5,6 +5,7 @@ import json
 import shutil
 import uuid
 from contextlib import redirect_stdout
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,8 @@ from codelite.config import load_app_config
 from codelite.core.delivery import DeliveryQueue
 from codelite.core.lanes import LaneScheduler
 from codelite.core.llm import ModelResult, ToolCallRequest
+from codelite.core.retrieval import RetrievalRouter
+from codelite.core.tavily import TavilySearchClient
 from codelite.core.validate_pipeline import ValidatePipeline, ValidateStageResult
 from codelite.hooks import HookRuntime
 from codelite.storage.events import EventStore, RuntimeLayout
@@ -47,6 +50,33 @@ class ScriptedNagModelClient:
                 ],
             )
         return ModelResult(text="completed with nag", tool_calls=[])
+
+
+class FakeRetrievalWebClient(TavilySearchClient):
+    def __init__(self) -> None:
+        super().__init__("test-key")
+
+    def search(
+        self,
+        *,
+        query: str,
+        max_results: int = 5,
+        topic: str = "general",
+        search_depth: str = "basic",
+        include_answer: bool = True,
+    ) -> dict[str, object]:
+        del max_results, topic, search_depth, include_answer
+        return {
+            "query": query,
+            "answer": "web answer",
+            "results": [
+                {
+                    "title": "Web Result",
+                    "url": "https://example.com/news",
+                    "content": "web content",
+                }
+            ],
+        }
 
 
 @pytest.fixture(autouse=True)
@@ -264,3 +294,127 @@ def test_v021_retrieval_memory_model_routing_and_todo_nag(
     layers = [attempt["layer"] for attempt in resilience["attempts"]]
     assert "overflow_compaction" in layers
     assert resilience["profile"] == "deep"
+
+
+def test_v021_retrieval_router_can_use_web_search_when_tavily_is_configured(workspace_dir: Path) -> None:
+    config = load_app_config(workspace_dir)
+    retrieval = RetrievalRouter(
+        workspace_root=workspace_dir,
+        layout=RuntimeLayout(workspace_dir),
+        runtime_config=config.runtime,
+        web_search_client=FakeRetrievalWebClient(),
+    )
+
+    payload = retrieval.run("search the latest AI news on the internet")
+
+    assert payload["decision"]["route"] == "web"
+    assert payload["decision"]["enough"] is True
+    assert payload["results"][0]["type"] == "answer"
+    assert payload["results"][1]["type"] == "web"
+
+
+def test_v021_permissions_cli_allows_storing_and_listing_decisions(
+    workspace_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepare_env(monkeypatch, workspace_dir)
+    payload = run_main_json(
+        [
+            "permissions",
+            "allow",
+            "--session-id",
+            "session-1",
+            "--tool",
+            "mcp_call",
+            "--arguments-json",
+            json.dumps({"server": "demo", "request": {"method": "ping"}}),
+            "--ttl-sec",
+            "60",
+            "--json",
+        ]
+    )
+    assert payload["decision"] == "allow"
+    listed = run_main_json(
+        [
+            "permissions",
+            "status",
+            "--session-id",
+            "session-1",
+            "--json",
+        ]
+    )
+    assert listed
+    assert listed[0]["tool_name"] == "mcp_call"
+
+
+def test_v021_delivery_process_supports_kind_filter_and_parallel_workers(
+    workspace_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepare_env(monkeypatch, workspace_dir)
+    run_main_json(
+        [
+            "delivery",
+            "enqueue",
+            "--kind",
+            "demo_echo",
+            "--payload-json",
+            json.dumps({"message": "ok"}),
+            "--json",
+        ]
+    )
+    run_main_json(
+        [
+            "delivery",
+            "enqueue",
+            "--kind",
+            "always_fail",
+            "--payload-json",
+            json.dumps({"message": "should-stay-pending"}),
+            "--json",
+        ]
+    )
+
+    processed = run_main_json(
+        [
+            "delivery",
+            "process",
+            "--kind",
+            "demo_echo",
+            "--workers",
+            "2",
+            "--json",
+        ]
+    )
+    assert processed
+    assert all(item["kind"] == "demo_echo" for item in processed)
+
+    status = run_main_json(["delivery", "status", "--json"])
+    assert any(item["kind"] == "always_fail" for item in status["pending"])
+
+
+def test_v021_delivery_recover_can_requeue_expired_claim(
+    workspace_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepare_env(monkeypatch, workspace_dir)
+    layout = RuntimeLayout(workspace_dir)
+    queue = DeliveryQueue(layout, load_app_config(workspace_dir).runtime)
+    created = queue.enqueue("demo_echo", {"message": "recover-claim"})
+    claimed = queue.claim_one(allowed_kinds={"demo_echo"}, worker_id="worker-a")
+    assert claimed is not None
+    assert claimed.delivery_id == created.delivery_id
+    assert claimed.status == "running"
+
+    pending_path = layout.delivery_pending_dir / f"{created.delivery_id}.json"
+    pending_payload = json.loads(pending_path.read_text(encoding="utf-8"))
+    pending_payload["claim_expires_at"] = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+    pending_path.write_text(json.dumps(pending_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    recovered_ids = queue.recover_pending()
+    assert created.delivery_id in recovered_ids
+
+    status = queue.status()
+    restored = next(item for item in status["pending"] if item["delivery_id"] == created.delivery_id)
+    assert restored["status"] == "pending"
+    assert restored["claimed_by"] == ""

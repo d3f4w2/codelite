@@ -80,14 +80,36 @@ def workspace_dir() -> Path:
 def write_low_threshold_config(workspace_dir: Path) -> Path:
     project_root = Path(__file__).resolve().parents[2]
     template = (project_root / "codelite" / "config" / "runtime.yaml").read_text(encoding="utf-8")
-    customized = (
-        template.replace("context_auto_compact_message_count: 18", "context_auto_compact_message_count: 4")
-        .replace("context_keep_last_messages: 8", "context_keep_last_messages: 2")
-        .replace("context_auto_compact_char_count: 12000", "context_auto_compact_char_count: 200")
-    )
+    customized = template
+    customized = customized.replace("context_auto_compact_message_count: 400", "context_auto_compact_message_count: 4")
+    customized = customized.replace("context_auto_compact_message_count: 18", "context_auto_compact_message_count: 4")
+    customized = customized.replace("context_keep_last_messages: 8", "context_keep_last_messages: 2")
+    customized = customized.replace("context_auto_compact_char_count: 800000", "context_auto_compact_char_count: 200")
+    customized = customized.replace("context_auto_compact_char_count: 12000", "context_auto_compact_char_count: 200")
     config_path = workspace_dir / "runtime.test.yaml"
     config_path.write_text(customized, encoding="utf-8")
     return config_path
+
+
+def test_v02_session_store_rename_and_summary_listing(workspace_dir: Path) -> None:
+    store = SessionStore(EventStore(RuntimeLayout(workspace_dir)))
+    first_session = store.new_session_id()
+    second_session = store.new_session_id()
+
+    store.append_message(first_session, role="user", content="first user message")
+    store.rename_session(first_session, "first-thread")
+    store.append_message(second_session, role="assistant", content="second assistant message")
+
+    summaries = store.list_session_summaries(limit=10)
+    assert any(item["session_id"] == first_session for item in summaries)
+    assert any(item["session_id"] == second_session for item in summaries)
+    first_summary = next(item for item in summaries if item["session_id"] == first_session)
+    assert first_summary["title"] == "first-thread"
+    assert first_summary["conversation"] == "first-thread"
+
+    filtered = store.list_session_summaries(limit=10, query="first-thread")
+    assert [item["session_id"] for item in filtered] == [first_session]
+    assert store.session_title(first_session) == "first-thread"
 
 
 def test_v02_todo_tool_and_context_compaction(

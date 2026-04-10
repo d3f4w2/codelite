@@ -3,6 +3,8 @@ from __future__ import annotations
 import io
 import json
 import shutil
+import threading
+import time
 import uuid
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -10,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from codelite.cli import main
-from codelite.core.llm import ModelResult
+from codelite.core.llm import ModelResult, ToolCallRequest
 
 
 def run_main_json(args: list[str], *, model_client: object | None = None) -> dict[str, object] | list[object]:
@@ -25,6 +27,54 @@ class ScriptedSubagentModelClient:
     def complete(self, messages: list[dict[str, object]], tools: list[dict[str, object]]) -> ModelResult:
         del messages, tools
         return ModelResult(text="subagent complete", tool_calls=[])
+
+
+class SlowConcurrentSubagentModelClient:
+    def __init__(self, *, delay_sec: float = 0.15) -> None:
+        self.delay_sec = delay_sec
+        self._lock = threading.Lock()
+        self.active = 0
+        self.max_active = 0
+
+    def complete(self, messages: list[dict[str, object]], tools: list[dict[str, object]]) -> ModelResult:
+        del messages, tools
+        with self._lock:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+        try:
+            time.sleep(self.delay_sec)
+            return ModelResult(text="subagent slow complete", tool_calls=[])
+        finally:
+            with self._lock:
+                self.active = max(0, self.active - 1)
+
+
+class WriteAttemptSubagentModelClient:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.first_tools: set[str] = set()
+        self.last_tool_output = ""
+
+    def complete(self, messages: list[dict[str, object]], tools: list[dict[str, object]]) -> ModelResult:
+        self.calls += 1
+        if self.calls == 1:
+            self.first_tools = {str(item.get("name", "")) for item in tools}
+            return ModelResult(
+                text="attempt write",
+                tool_calls=[
+                    ToolCallRequest(
+                        id="call-write",
+                        name="write_file",
+                        arguments={"path": "blocked-by-profile.txt", "content": "should not be written"},
+                    )
+                ],
+            )
+
+        for item in reversed(messages):
+            if str(item.get("role", "")) == "tool":
+                self.last_tool_output = str(item.get("content", ""))
+                break
+        return ModelResult(text=f"done {self.last_tool_output}", tool_calls=[])
 
 
 @pytest.fixture(autouse=True)
@@ -129,6 +179,7 @@ def test_v022_agent_team_and_subagent_queue_process(
         ]
     )
     subagent_id = spawned["subagent"]["subagent_id"]
+    assert spawned["subagent"]["agent_type"] == "general-purpose"
 
     processed = run_main_json(
         [
@@ -145,6 +196,35 @@ def test_v022_agent_team_and_subagent_queue_process(
     assert detail["status"] == "done"
     assert detail["subagent_session_id"]
     assert Path(detail["result_path"]).exists()
+
+
+def test_v022_default_team_alias_can_spawn_subagent_sync(
+    workspace_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepare_env(monkeypatch, workspace_dir)
+
+    payload = run_main_json(
+        [
+            "subagent",
+            "spawn",
+            "--team-id",
+            "default",
+            "--prompt",
+            "Please only output hello.",
+            "--session-id",
+            "parent-session",
+            "--mode",
+            "sync",
+            "--json",
+        ],
+        model_client=ScriptedSubagentModelClient(),
+    )
+
+    assert payload["subagent"]["team_id"].startswith("default-")
+    assert payload["subagent"]["status"] == "done"
+    assert payload["subagent"]["agent_type"] == "general-purpose"
+    assert payload["result"]["status"] == "done"
 
 
 def test_v022_subagent_process_ignores_non_subagent_deliveries(
@@ -317,3 +397,116 @@ def test_v022_mcp_entrypoint_accepts_relaxed_json_inputs(
     assert called["response"]["ok"] is True
     assert called["response"]["id"] == "manual-1"
     assert called["response"]["method"] == "ping"
+
+
+def test_v022_subagent_parallel_process_respects_team_max_subagents(
+    workspace_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepare_env(monkeypatch, workspace_dir)
+
+    team = run_main_json(
+        [
+            "team",
+            "create",
+            "--name",
+            "limit-team",
+            "--strategy",
+            "parallel",
+            "--max-subagents",
+            "2",
+            "--json",
+        ]
+    )
+    team_id = str(team["team_id"])
+
+    for index in range(4):
+        run_main_json(
+            [
+                "subagent",
+                "spawn",
+                "--team-id",
+                team_id,
+                "--prompt",
+                f"task {index}",
+                "--mode",
+                "queue",
+                "--json",
+            ]
+        )
+
+    model = SlowConcurrentSubagentModelClient(delay_sec=0.2)
+    processed = run_main_json(
+        [
+            "subagent",
+            "process",
+            "--max-items",
+            "4",
+            "--workers",
+            "4",
+            "--json",
+        ],
+        model_client=model,
+    )
+
+    assert len(processed) == 4
+    assert all(item["status"] == "done" for item in processed)
+    assert model.max_active <= 2
+
+
+def test_v022_subagent_spawn_rejects_invalid_agent_type(
+    workspace_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepare_env(monkeypatch, workspace_dir)
+
+    with pytest.raises(SystemExit) as exc:
+        main(
+            [
+                "subagent",
+                "spawn",
+                "--team-id",
+                "default",
+                "--prompt",
+                "hello",
+                "--agent-type",
+                "invalid-role",
+                "--mode",
+                "queue",
+                "--json",
+            ],
+            model_client=ScriptedSubagentModelClient(),  # type: ignore[arg-type]
+        )
+    assert exc.value.code == 2
+
+
+def test_v022_explore_agent_blocks_write_tools(
+    workspace_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepare_env(monkeypatch, workspace_dir)
+    model = WriteAttemptSubagentModelClient()
+
+    payload = run_main_json(
+        [
+            "subagent",
+            "spawn",
+            "--team-id",
+            "default",
+            "--prompt",
+            "Try writing a file then summarize.",
+            "--agent-type",
+            "explore",
+            "--mode",
+            "sync",
+            "--json",
+        ],
+        model_client=model,
+    )
+
+    assert payload["subagent"]["status"] == "done"
+    assert payload["subagent"]["agent_type"] == "explore"
+    assert "write_file" not in model.first_tools
+    assert "TOOL_ERROR:" in model.last_tool_output
+    assert "blocked" in model.last_tool_output.lower()
+    assert not (workspace_dir / "blocked-by-profile.txt").exists()

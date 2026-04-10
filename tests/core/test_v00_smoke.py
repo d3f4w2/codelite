@@ -8,13 +8,19 @@ import sys
 import uuid
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 from unittest.mock import Mock
 
 import pytest
 
 from codelite.config import load_app_config
+import codelite.config.loader as config_loader
+from codelite.core.context import ContextCompact
 from codelite.core.llm import ModelResult, OpenAICompatibleClient, ToolCallRequest
 from codelite.core.loop import AgentLoop
+from codelite.core.permissions import PermissionStore
+from codelite.core.system_prompt import DYNAMIC_BOUNDARY_MARKER, build_system_prompt
+from codelite.core.tavily import TavilySearchClient
 from codelite.core.tools import ToolError, ToolRouter
 from codelite.storage.events import EventStore, RuntimeLayout
 from codelite.storage.sessions import SessionStore
@@ -91,6 +97,33 @@ class ScriptedModelClient:
         return ModelResult(text="done", tool_calls=[])
 
 
+class FakeWebSearchClient(TavilySearchClient):
+    def __init__(self) -> None:
+        super().__init__("test-key")
+
+    def search(
+        self,
+        *,
+        query: str,
+        max_results: int = 5,
+        topic: str = "general",
+        search_depth: str = "basic",
+        include_answer: bool = True,
+    ) -> dict[str, object]:
+        del max_results, topic, search_depth, include_answer
+        return {
+            "query": query,
+            "answer": "stub answer",
+            "results": [
+                {
+                    "title": "Stub Result",
+                    "url": "https://example.com",
+                    "content": "stub content",
+                }
+            ],
+        }
+
+
 @pytest.fixture()
 def workspace_dir() -> Path:
     repo = Path(__file__).resolve().parents[2]
@@ -140,6 +173,35 @@ def test_v00_cli_health_json(workspace_dir: Path) -> None:
     assert payload["llm"]["configured"] is False
 
 
+def test_v00_cli_health_from_system32_falls_back_to_safe_workspace() -> None:
+    if os.name != "nt":
+        pytest.skip("Windows-only shell startup behavior")
+
+    repo = Path(__file__).resolve().parents[2]
+    system32 = Path(os.environ.get("WINDIR", r"C:\Windows")) / "System32"
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(repo) + os.pathsep + env.get("PYTHONPATH", "")
+    env.pop("CODELITE_WORKSPACE_ROOT", None)
+    env["CODELITE_LLM_API_KEY"] = ""
+    env["CODELITE_EMBEDDING_API_KEY"] = ""
+    env["CODELITE_RERANK_API_KEY"] = ""
+    env["TAVILY_API_KEY"] = ""
+
+    result = subprocess.run(
+        [sys.executable, "-m", "codelite.cli", "health", "--json"],
+        cwd=system32,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    payload = json.loads(result.stdout)
+
+    assert payload["workspace_root"] == str(repo)
+    assert payload["cwd"] == str(system32)
+    assert "PermissionError" not in result.stderr
+
+
 def test_v00_loads_keys_from_dotenv(workspace_dir: Path) -> None:
     (workspace_dir / ".env").write_text(
         "\n".join(
@@ -159,6 +221,34 @@ def test_v00_loads_keys_from_dotenv(workspace_dir: Path) -> None:
     assert config.embedding.api_key == "test-embedding-key"
     assert config.rerank.api_key == "test-rerank-key"
     assert config.tavily.api_key == "test-tavily-key"
+
+
+def test_v00_loads_api_keys_from_package_env_fallback(
+    workspace_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = workspace_dir.parent / f"pkg-{uuid.uuid4().hex[:8]}"
+    package_root.mkdir(parents=True, exist_ok=False)
+    (package_root / ".env").write_text(
+        "\n".join(
+            [
+                "CODELITE_LLM_API_KEY=fallback-llm",
+                "CODELITE_EMBEDDING_API_KEY=fallback-embedding",
+                "CODELITE_RERANK_API_KEY=fallback-rerank",
+                "TAVILY_API_KEY=fallback-tavily",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(config_loader, "_package_workspace_root", lambda: package_root)
+
+    config = load_app_config(workspace_dir)
+
+    assert config.llm.api_key == "fallback-llm"
+    assert config.embedding.api_key == "fallback-embedding"
+    assert config.rerank.api_key == "fallback-rerank"
+    assert config.tavily.api_key == "fallback-tavily"
 
 
 def test_v00_llm_client_uses_browser_like_headers(workspace_dir: Path) -> None:
@@ -288,6 +378,20 @@ def test_v00_bash_tool_uses_utf8_decode_for_subprocess_output(workspace_dir: Pat
     assert kwargs["errors"] == "replace"
 
 
+def test_v00_tool_router_supports_web_search_with_tavily_client(workspace_dir: Path) -> None:
+    config = load_app_config(workspace_dir)
+    router = ToolRouter(
+        workspace_dir,
+        config.runtime,
+        web_search_client=FakeWebSearchClient(),
+    )
+
+    result = router.dispatch("web_search", {"query": "latest ai news"})
+
+    assert "stub answer" in result.output
+    assert "Stub Result" in result.output
+
+
 def test_v00_session_replay_survives_gbk_console_encoding(workspace_dir: Path) -> None:
     repo = Path(__file__).resolve().parents[2]
     session_store, _ = build_agent_loop(workspace_dir)
@@ -307,3 +411,102 @@ def test_v00_session_replay_survives_gbk_console_encoding(workspace_dir: Path) -
 
     assert replay.returncode == 0
     assert session_id in replay.stdout
+
+
+def test_v00_dynamic_prompt_boundary_builder(workspace_dir: Path) -> None:
+    prompt = build_system_prompt(
+        base_prompt="You are CodeLite.",
+        workspace_root=workspace_dir,
+        session_id="session-x",
+        profile_name="fast",
+        enable_dynamic_boundary=True,
+    ).full_prompt
+    assert DYNAMIC_BOUNDARY_MARKER in prompt
+    assert "session_id: session-x" in prompt
+
+
+def test_v00_context_function_result_clearing_keeps_recent_tool_messages(workspace_dir: Path) -> None:
+    config = load_app_config(workspace_dir)
+    runtime = replace(
+        config.runtime,
+        tool_result_keep_recent=2,
+        context_auto_compact_message_count=999,
+        context_auto_compact_char_count=999999,
+    )
+    compact = ContextCompact(RuntimeLayout(workspace_dir), runtime)
+    messages = [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": "u1"},
+        {"role": "tool", "name": "a", "tool_call_id": "1", "content": "r1"},
+        {"role": "tool", "name": "b", "tool_call_id": "2", "content": "r2"},
+        {"role": "tool", "name": "c", "tool_call_id": "3", "content": "r3"},
+        {"role": "tool", "name": "d", "tool_call_id": "4", "content": "r4"},
+    ]
+    prepared = compact.prepare("session-fc", messages)
+    tool_messages = [item for item in prepared if item.get("role") == "tool"]
+    assert len(tool_messages) == 4
+    assert tool_messages[0]["content"].startswith("[tool result cleared")
+    assert tool_messages[1]["content"].startswith("[tool result cleared")
+    assert tool_messages[2]["content"] == "r3"
+    assert tool_messages[3]["content"] == "r4"
+    snapshot = compact.get("session-fc")
+    assert snapshot is not None
+    assert snapshot.cleared_tool_results == 2
+
+
+def test_v00_context_should_compact_respects_message_and_char_thresholds(workspace_dir: Path) -> None:
+    config = load_app_config(workspace_dir)
+    compact = ContextCompact(RuntimeLayout(workspace_dir), config.runtime)
+    small = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "ok"},
+    ]
+    assert compact.should_compact(small) is False
+
+    message_overflow = [{"role": "user", "content": "x"} for _ in range(config.runtime.context_auto_compact_message_count + 1)]
+    assert compact.should_compact(message_overflow) is True
+
+    char_runtime = replace(
+        config.runtime,
+        context_auto_compact_message_count=999999,
+        context_auto_compact_char_count=20,
+    )
+    char_compact = ContextCompact(RuntimeLayout(workspace_dir), char_runtime)
+    assert char_compact.should_compact([{"role": "user", "content": "a" * 40}]) is True
+
+
+def test_v00_permission_store_controls_ask_tools(workspace_dir: Path) -> None:
+    class DummyMcp:
+        def list_servers(self) -> list[dict[str, Any]]:
+            return [{"name": "demo"}]
+
+        def call(self, name: str, request: dict[str, Any], timeout_sec: int = 60) -> dict[str, Any]:
+            return {"name": name, "request": request, "timeout_sec": timeout_sec, "ok": True}
+
+    config = load_app_config(workspace_dir)
+    layout = RuntimeLayout(workspace_dir)
+    permission_store = PermissionStore(layout)
+    session_id = "perm-session"
+    router = ToolRouter(
+        workspace_dir,
+        config.runtime,
+        session_id=session_id,
+        mcp_runtime=DummyMcp(),
+        permission_store=permission_store,
+    )
+    args = {"server": "demo", "request": {"method": "ping"}, "timeout_sec": 5}
+    first = router.execute_tool_calls(
+        [ToolCallRequest(id="c1", name="mcp_call", arguments=args)]
+    )[0]
+    assert first.ok is False
+    assert "Permission requires approval" in first.output
+
+    permission_store.remember(
+        session_id=session_id,
+        tool_name="mcp_call",
+        arguments=args,
+        decision="allow",
+        ttl_seconds=300,
+    )
+    second = router.dispatch("mcp_call", args)
+    assert "\"ok\": true" in second.output.lower()

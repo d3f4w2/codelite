@@ -8,6 +8,7 @@ from .loader import (
     RuntimeConfig,
     TavilyConfig,
     load_app_config,
+    resolve_workspace_root,
 )
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "RuntimeConfig",
     "TavilyConfig",
     "load_app_config",
+    "resolve_workspace_root",
 ]

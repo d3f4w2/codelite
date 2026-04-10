@@ -11,6 +11,7 @@ import yaml
 
 from codelite.core.delivery import DeliveryQueue
 from codelite.core.memory_runtime import MemoryRuntime
+from codelite.core.parallel_dispatcher import ParallelDispatcher
 from codelite.core.todo import TodoManager
 from codelite.storage.events import RuntimeLayout, utc_now
 from codelite.storage.sessions import SessionStore
@@ -137,11 +138,22 @@ class SkillRuntime:
         )
         return item.to_dict()
 
-    def process_background_tasks(self, *, max_items: int | None = None) -> list[dict[str, Any]]:
-        return self.delivery_queue.process_all_for_kinds(
-            {"background_task": self._handle_background_task},
-            allowed_kinds={"background_task"},
+    def process_background_tasks(
+        self,
+        *,
+        max_items: int | None = None,
+        workers: int | None = None,
+    ) -> list[dict[str, Any]]:
+        dispatcher = ParallelDispatcher(
+            delivery_queue=self.delivery_queue,
+            handlers={"background_task": self._handle_background_task},
+        )
+        return dispatcher.process(
             max_items=max_items,
+            workers=workers,
+            allowed_kinds={"background_task"},
+            kind_reservations={"background_task": workers or self.delivery_queue.dispatcher_background_reserved_workers},
+            worker_prefix="background",
         )
 
     def background_status(self) -> dict[str, Any]:

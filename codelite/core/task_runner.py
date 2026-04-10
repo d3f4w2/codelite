@@ -13,6 +13,7 @@ from codelite.core.loop import AgentLoop
 from codelite.core.memory_runtime import MemoryRuntime
 from codelite.core.mcp_runtime import McpRuntime
 from codelite.core.model_router import ModelRouter
+from codelite.core.permissions import PermissionStore
 from codelite.core.resilience import ResilienceRunner
 from codelite.core.retrieval import RetrievalRouter
 from codelite.core.skills_runtime import SkillRuntime
@@ -63,6 +64,7 @@ class TaskRunner:
         mcp_runtime: McpRuntime | None = None,
         memory_runtime: MemoryRuntime | None = None,
         hook_runtime: HookRuntime | None = None,
+        permission_store: PermissionStore | None = None,
     ) -> None:
         self.workspace_root = workspace_root.resolve()
         self.config = config
@@ -81,6 +83,7 @@ class TaskRunner:
         self.mcp_runtime = mcp_runtime
         self.memory_runtime = memory_runtime
         self.hook_runtime = hook_runtime
+        self.permission_store = permission_store
 
     def run(
         self,
@@ -90,6 +93,7 @@ class TaskRunner:
         title: str = "",
         session_id: str | None = None,
         owner: str = "task_runner",
+        require_plan: bool = False,
     ) -> TaskRunResult:
         lease = self.task_store.acquire_lease(task_id, owner=owner, title=title or task_id)
 
@@ -126,6 +130,9 @@ class TaskRunner:
                 skill_runtime=self.skill_runtime,
                 agent_team_runtime=self.agent_team_runtime,
                 mcp_runtime=self.mcp_runtime,
+                tavily_api_key=self.config.tavily.api_key,
+                permission_store=self.permission_store,
+                permission_approval_ttl_sec=self.config.runtime.permission_approval_ttl_sec,
             )
             loop = AgentLoop(
                 config=self.config,
@@ -141,7 +148,11 @@ class TaskRunner:
                 skill_runtime=self.skill_runtime,
                 memory_runtime=self.memory_runtime,
             )
-            answer = loop.run_turn(session_id=current_session_id, user_input=prompt)
+            answer = loop.run_turn(
+                session_id=current_session_id,
+                user_input=prompt,
+                require_plan=require_plan,
+            )
             completed_task = self.task_store.complete_task(task_id, lease_id=lease.lease_id)
             completed_task = self.task_store.update_metadata(
                 task_id,

@@ -16,6 +16,12 @@ class MemoryPolicy:
             "mcp",
             "failure",
             "review",
+            "preference",
+            "experience",
+            "reflection_rule",
+            "memory_candidate",
+            "memory_decision",
+            "memory_file_update",
         }
     )
 

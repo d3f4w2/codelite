@@ -8,6 +8,7 @@ from typing import Any
 
 from codelite.config import RuntimeConfig
 from codelite.core.memory_runtime import MemoryRuntime
+from codelite.core.tavily import TavilySearchClient
 from codelite.storage.events import RuntimeLayout, utc_now
 
 
@@ -32,20 +33,31 @@ class RetrievalRouter:
         layout: RuntimeLayout,
         runtime_config: RuntimeConfig,
         memory_runtime: MemoryRuntime | None = None,
+        tavily_api_key: str = "",
+        web_search_client: TavilySearchClient | None = None,
     ) -> None:
         self.workspace_root = workspace_root.resolve()
         self.layout = layout
         self.layout.ensure()
         self.max_results = runtime_config.retrieval_max_results
         self.memory_runtime = memory_runtime
+        self.web_search_client = web_search_client or (TavilySearchClient(tavily_api_key) if tavily_api_key else None)
 
     def decide(self, prompt: str) -> RetrievalDecision:
         lowered = prompt.lower()
         query_terms = self._query_terms(prompt)
-        if any(token in lowered for token in ("latest", "search", "look up", "查", "检索", "检索一下")):
+        web_requested = any(
+            token in lowered
+            for token in ("latest", "search", "look up", "google", "internet", "web", "互联网", "网上", "联网", "上网", "搜索", "查一下", "查一查", "最新")
+        )
+        if web_requested and self.web_search_client is not None and self.web_search_client.configured:
+            route = "web"
+            retrieve = True
+            reason = "prompt requests internet or latest information and Tavily is configured"
+        elif any(token in lowered for token in ("latest", "search", "look up", "查", "检索", "检索一下")):
             route = "local_docs"
             retrieve = True
-            reason = "prompt explicitly requests retrieval"
+            reason = "prompt explicitly requests retrieval but only local retrieval is available"
         elif any(token in lowered for token in (".py", "function", "class", "module", "代码", "实现")):
             route = "local_code"
             retrieve = True
@@ -74,7 +86,7 @@ class RetrievalRouter:
         decision = self.decide(prompt)
         results: list[dict[str, Any]] = []
         if decision.retrieve:
-            results = self._search(decision.route, decision.query_terms)
+            results = self._search(decision.route, decision.query_terms, prompt=prompt)
         enough = bool(results) if decision.retrieve else True
         finalized = RetrievalDecision(
             **{
@@ -97,10 +109,35 @@ class RetrievalRouter:
             )
         return payload
 
-    def _search(self, route: str, query_terms: list[str]) -> list[dict[str, Any]]:
+    def _search(self, route: str, query_terms: list[str], *, prompt: str) -> list[dict[str, Any]]:
         if not query_terms:
-            return []
+            if route != "web":
+                return []
         patterns = [term.lower() for term in query_terms]
+        if route == "web":
+            if self.web_search_client is None or not self.web_search_client.configured:
+                return []
+            payload = self.web_search_client.search(
+                query=prompt,
+                max_results=self.max_results,
+                topic="news" if any(token in prompt.lower() for token in ("latest", "news", "最新", "新闻")) else "general",
+                search_depth="advanced",
+                include_answer=True,
+            )
+            answer = payload.get("answer")
+            results: list[dict[str, Any]] = []
+            if isinstance(answer, str) and answer.strip():
+                results.append({"type": "answer", "text": answer.strip()[:400]})
+            for item in payload.get("results") or []:
+                results.append(
+                    {
+                        "type": "web",
+                        "title": str(item.get("title", "")),
+                        "url": str(item.get("url", "")),
+                        "text": str(item.get("content", ""))[:400],
+                    }
+                )
+            return results[: self.max_results + 1]
         if route == "local_docs":
             candidates = list(self.workspace_root.glob("README.md")) + list((self.workspace_root / "docs").rglob("*.md"))
         elif route == "local_code":

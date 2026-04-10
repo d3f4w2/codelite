@@ -10,10 +10,12 @@ from typing import Any, Callable
 
 from codelite.core.delivery import DeliveryQueue
 from codelite.core.memory_runtime import MemoryRuntime
+from codelite.core.parallel_dispatcher import ParallelDispatcher
+from codelite.core.subagent_profiles import GENERAL_PURPOSE_AGENT_TYPE, normalize_agent_type
 from codelite.storage.events import RuntimeLayout, utc_now
 
 
-SubagentExecutor = Callable[[str, str | None, str, dict[str, Any]], dict[str, Any]]
+SubagentExecutor = Callable[[str, str | None, str, str, dict[str, Any]], dict[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -44,6 +46,7 @@ class AgentTeamSpec:
 class SubagentRecord:
     subagent_id: str
     team_id: str
+    agent_type: str
     prompt: str
     parent_session_id: str | None
     subagent_session_id: str | None
@@ -58,9 +61,11 @@ class SubagentRecord:
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> SubagentRecord:
+        agent_type = _coerce_agent_type(payload.get("agent_type"))
         return cls(
             subagent_id=str(payload["subagent_id"]),
             team_id=str(payload["team_id"]),
+            agent_type=agent_type,
             prompt=str(payload["prompt"]),
             parent_session_id=payload.get("parent_session_id"),
             subagent_session_id=payload.get("subagent_session_id"),
@@ -136,6 +141,43 @@ class AgentTeamRuntime:
         return teams
 
     def get_team(self, team_id: str) -> AgentTeamSpec | None:
+        resolved = self._resolve_team_ref(team_id)
+        if resolved is None:
+            return None
+        path = self._team_path(resolved)
+        if not path.exists():
+            return None
+        with path.open("r", encoding="utf-8") as handle:
+            return AgentTeamSpec.from_dict(json.load(handle))
+
+    def resolve_team_id(self, team_ref: str) -> str:
+        resolved = self._resolve_team_ref(team_ref)
+        if resolved is None:
+            raise RuntimeError(f"unknown team_id `{team_ref}`")
+        return resolved
+
+    def _resolve_team_ref(self, team_ref: str) -> str | None:
+        normalized = str(team_ref).strip()
+        if not normalized:
+            return None
+        if normalized == "default":
+            return self.ensure_default_team().team_id
+
+        path = self._team_path(normalized)
+        if path.exists():
+            return normalized
+
+        hashed = _team_key(normalized)
+        if hashed != normalized and self._team_path(hashed).exists():
+            return hashed
+
+        lowered = normalized.lower()
+        for team in self.list_teams():
+            if team.name.strip().lower() == lowered:
+                return team.team_id
+        return None
+
+    def _get_team_exact(self, team_id: str) -> AgentTeamSpec | None:
         path = self._team_path(team_id)
         if not path.exists():
             return None
@@ -147,14 +189,15 @@ class AgentTeamRuntime:
         *,
         team_id: str,
         prompt: str,
+        agent_type: str = GENERAL_PURPOSE_AGENT_TYPE,
         parent_session_id: str | None = None,
         metadata: dict[str, Any] | None = None,
         max_attempts: int | None = None,
     ) -> dict[str, Any]:
-        if self.get_team(team_id) is None:
-            raise RuntimeError(f"unknown team_id `{team_id}`")
+        resolved_team_id = self.resolve_team_id(team_id)
         record = self._new_subagent_record(
-            team_id=team_id,
+            team_id=resolved_team_id,
+            agent_type=agent_type,
             prompt=prompt,
             parent_session_id=parent_session_id,
             metadata=metadata,
@@ -162,14 +205,19 @@ class AgentTeamRuntime:
         self._write_subagent(record)
         item = self.delivery_queue.enqueue(
             "subagent_task",
-            {"subagent_id": record.subagent_id},
+            {"subagent_id": record.subagent_id, "team_id": resolved_team_id},
             max_attempts=max_attempts,
+            team_id=resolved_team_id,
         )
         if self.memory_runtime is not None:
             self.memory_runtime.remember(
                 kind="subagent",
                 text=f"spawned subagent {record.subagent_id}",
-                metadata={"team_id": team_id, "parent_session_id": parent_session_id or ""},
+                metadata={
+                    "team_id": resolved_team_id,
+                    "agent_type": record.agent_type,
+                    "parent_session_id": parent_session_id or "",
+                },
             )
         return {
             "subagent": record.to_dict(),
@@ -181,13 +229,14 @@ class AgentTeamRuntime:
         *,
         team_id: str,
         prompt: str,
+        agent_type: str = GENERAL_PURPOSE_AGENT_TYPE,
         parent_session_id: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        if self.get_team(team_id) is None:
-            raise RuntimeError(f"unknown team_id `{team_id}`")
+        resolved_team_id = self.resolve_team_id(team_id)
         record = self._new_subagent_record(
-            team_id=team_id,
+            team_id=resolved_team_id,
+            agent_type=agent_type,
             prompt=prompt,
             parent_session_id=parent_session_id,
             metadata=metadata,
@@ -199,11 +248,23 @@ class AgentTeamRuntime:
             "result": result,
         }
 
-    def process_subagents(self, *, max_items: int | None = None) -> list[dict[str, Any]]:
-        processed = self.delivery_queue.process_all_for_kinds(
-            {"subagent_task": self._handle_subagent_task},
-            allowed_kinds={"subagent_task"},
+    def process_subagents(
+        self,
+        *,
+        max_items: int | None = None,
+        workers: int | None = None,
+    ) -> list[dict[str, Any]]:
+        dispatcher = ParallelDispatcher(
+            delivery_queue=self.delivery_queue,
+            handlers={"subagent_task": self._handle_subagent_task},
+            team_limit_resolver=self._resolve_team_limit,
+        )
+        processed = dispatcher.process(
             max_items=max_items,
+            workers=workers,
+            allowed_kinds={"subagent_task"},
+            kind_reservations={"subagent_task": workers or self.delivery_queue.dispatcher_subagent_reserved_workers},
+            worker_prefix="subagent",
         )
         normalized: list[dict[str, Any]] = []
         for item in processed:
@@ -221,6 +282,12 @@ class AgentTeamRuntime:
             normalized.append(item)
         return normalized
 
+    def _resolve_team_limit(self, team_id: str) -> int:
+        team = self._get_team_exact(team_id)
+        if team is None:
+            return self.delivery_queue.dispatcher_team_default_limit
+        return max(1, int(team.max_subagents))
+
     def list_subagents(
         self,
         *,
@@ -229,10 +296,11 @@ class AgentTeamRuntime:
         limit: int = 100,
     ) -> list[SubagentRecord]:
         records: list[SubagentRecord] = []
+        resolved_team_id = self._resolve_team_ref(team_id) if team_id is not None else None
         for path in sorted(self.layout.agent_team_subagents_dir.glob("*.json")):
             with path.open("r", encoding="utf-8") as handle:
                 record = SubagentRecord.from_dict(json.load(handle))
-            if team_id is not None and record.team_id != team_id:
+            if resolved_team_id is not None and record.team_id != resolved_team_id:
                 continue
             if status is not None and record.status != status:
                 continue
@@ -275,6 +343,7 @@ class AgentTeamRuntime:
                 running.prompt,
                 running.parent_session_id,
                 running.team_id,
+                running.agent_type,
                 dict(running.metadata),
             )
         except Exception as exc:
@@ -291,7 +360,7 @@ class AgentTeamRuntime:
                 self.memory_runtime.remember(
                     kind="subagent",
                     text=f"subagent {running.subagent_id} failed",
-                    metadata={"team_id": running.team_id},
+                    metadata={"team_id": running.team_id, "agent_type": running.agent_type},
                     evidence=[{"error": str(exc)}],
                 )
             raise
@@ -301,6 +370,7 @@ class AgentTeamRuntime:
         result_payload = {
             "subagent_id": running.subagent_id,
             "team_id": running.team_id,
+            "agent_type": running.agent_type,
             "parent_session_id": running.parent_session_id,
             "subagent_session_id": session_id,
             "prompt": running.prompt,
@@ -327,13 +397,14 @@ class AgentTeamRuntime:
             self.memory_runtime.remember(
                 kind="subagent",
                 text=f"subagent {running.subagent_id} completed",
-                metadata={"team_id": running.team_id, "session_id": session_id},
+                metadata={"team_id": running.team_id, "agent_type": running.agent_type, "session_id": session_id},
                 evidence=[{"result_path": str(result_path)}],
             )
 
         return {
             "subagent_id": running.subagent_id,
             "team_id": running.team_id,
+            "agent_type": running.agent_type,
             "status": "done",
             "session_id": session_id,
             "result_path": str(result_path),
@@ -343,14 +414,17 @@ class AgentTeamRuntime:
         self,
         *,
         team_id: str,
+        agent_type: str,
         prompt: str,
         parent_session_id: str | None,
         metadata: dict[str, Any] | None,
     ) -> SubagentRecord:
         now = utc_now()
+        normalized_agent_type = normalize_agent_type(agent_type)
         return SubagentRecord(
             subagent_id=uuid.uuid4().hex,
             team_id=team_id,
+            agent_type=normalized_agent_type,
             prompt=prompt,
             parent_session_id=parent_session_id,
             subagent_session_id=None,
@@ -394,3 +468,10 @@ def _team_key(name: str) -> str:
     safe = safe[:48].rstrip("._-") or "team"
     digest = hashlib.sha1(stripped.encode("utf-8")).hexdigest()[:8]
     return f"{safe}-{digest}"
+
+
+def _coerce_agent_type(value: Any) -> str:
+    try:
+        return normalize_agent_type(str(value or ""))
+    except RuntimeError:
+        return GENERAL_PURPOSE_AGENT_TYPE

@@ -50,8 +50,9 @@ class CronScheduler:
         self.layout = layout
         self.layout.ensure()
         self.event_bus = event_bus
-        self.enabled = enabled
+        self.enabled = self._load_scheduler_enabled(default=enabled)
         self.jobs: dict[str, ScheduledJob] = {}
+        self._overrides = self._load_overrides()
 
     def register(
         self,
@@ -62,7 +63,14 @@ class CronScheduler:
         *,
         enabled: bool = True,
     ) -> ScheduledJob:
-        job = ScheduledJob(name=name, schedule=schedule, description=description, handler=handler, enabled=enabled)
+        override = self._overrides.get(name, {})
+        job = ScheduledJob(
+            name=name,
+            schedule=str(override.get("schedule", schedule)),
+            description=str(override.get("description", description)),
+            handler=handler,
+            enabled=bool(override.get("enabled", enabled)),
+        )
         state = self._load_state(name)
         if state is not None:
             job.last_run_at = state.get("last_run_at")
@@ -71,6 +79,38 @@ class CronScheduler:
             job.run_count = int(state.get("run_count", 0))
         self.jobs[name] = job
         return job
+
+    def configure_job(
+        self,
+        name: str,
+        *,
+        schedule: str | None = None,
+        enabled: bool | None = None,
+        description: str | None = None,
+    ) -> ScheduledJob:
+        if name not in self.jobs:
+            raise KeyError(f"unknown cron job: {name}")
+        job = self.jobs[name]
+        if schedule is not None:
+            job.schedule = schedule
+        if enabled is not None:
+            job.enabled = enabled
+        if description is not None and description.strip():
+            job.description = description.strip()
+
+        self._overrides[name] = {
+            "schedule": job.schedule,
+            "enabled": job.enabled,
+            "description": job.description,
+        }
+        self._persist_overrides()
+        self._persist_state(job)
+        return job
+
+    def set_enabled(self, enabled: bool) -> bool:
+        self.enabled = bool(enabled)
+        self._persist_scheduler_enabled()
+        return self.enabled
 
     def list_jobs(self, *, now: datetime | None = None) -> list[dict[str, Any]]:
         checkpoint = now or datetime.now(timezone.utc)
@@ -146,12 +186,36 @@ class CronScheduler:
     def _state_path(self, name: str) -> Path:
         return self.layout.cron_dir / f"{name}.json"
 
+    def _override_path(self) -> Path:
+        return self.layout.cron_dir / "overrides.json"
+
+    def _scheduler_path(self) -> Path:
+        return self.layout.cron_dir / "scheduler.json"
+
     def _load_state(self, name: str) -> dict[str, Any] | None:
         path = self._state_path(name)
         if not path.exists():
             return None
         with path.open("r", encoding="utf-8") as handle:
             return json.load(handle)
+
+    def _load_overrides(self) -> dict[str, dict[str, Any]]:
+        path = self._override_path()
+        if not path.exists():
+            return {}
+        with path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        return payload if isinstance(payload, dict) else {}
+
+    def _load_scheduler_enabled(self, *, default: bool) -> bool:
+        path = self._scheduler_path()
+        if not path.exists():
+            return bool(default)
+        with path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        if isinstance(payload, dict) and isinstance(payload.get("enabled"), bool):
+            return bool(payload["enabled"])
+        return bool(default)
 
     def _persist_state(self, job: ScheduledJob) -> None:
         path = self._state_path(job.name)
@@ -167,6 +231,26 @@ class CronScheduler:
             "updated_at": utc_now(),
         }
         path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_suffix(path.suffix + ".tmp")
+        with tmp_path.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+        tmp_path.replace(path)
+
+    def _persist_overrides(self) -> None:
+        path = self._override_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_suffix(path.suffix + ".tmp")
+        with tmp_path.open("w", encoding="utf-8") as handle:
+            json.dump(self._overrides, handle, ensure_ascii=False, indent=2)
+        tmp_path.replace(path)
+
+    def _persist_scheduler_enabled(self) -> None:
+        path = self._scheduler_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "enabled": self.enabled,
+            "updated_at": utc_now(),
+        }
         tmp_path = path.with_suffix(path.suffix + ".tmp")
         with tmp_path.open("w", encoding="utf-8") as handle:
             json.dump(payload, handle, ensure_ascii=False, indent=2)
