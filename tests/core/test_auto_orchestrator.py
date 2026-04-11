@@ -240,12 +240,84 @@ def test_shell_auto_routes_complex_turn_to_worktree(
     assert task is not None
     assert task.status is TaskStatus.DONE
     worktree_path = Path(task.metadata["worktree"]["path"])
+    assert worktree_path.is_relative_to(git_repo / ".wt")
     assert (git_repo / "app.txt").read_text(encoding="utf-8") == "base\n"
     assert (worktree_path / "app.txt").read_text(encoding="utf-8") == "worktree-routed\n"
 
     events = SessionStore(EventStore(RuntimeLayout(git_repo))).replay(shell.session_id)
     assert any(event["event_type"] == "auto_orchestrator_decision" for event in events)
     assert any(event["event_type"] == "auto_worktree_routed" for event in events)
+
+    output = stdout.getvalue()
+    assert "[ASSISTANT]" in output
+    assert "routed-done" in output
+
+
+def test_shell_worktree_command_routes_prompt_to_managed_worktree(
+    git_repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _prepare_env(monkeypatch, git_repo)
+
+    services = build_runtime(git_repo, model_client=WorktreeRouteModelClient())
+    shell = CodeLiteShell(services)
+
+    stdout = io.StringIO()
+    with redirect_stdout(stdout):
+        assert shell._handle_local_command("/worktree Update app.txt inside the managed worktree.") is True
+
+    expected_task_id = f"shell-{shell.session_id[-8:]}-turn-01"
+    task = TaskStore(RuntimeLayout(git_repo)).get_task(expected_task_id)
+    assert task is not None
+    assert task.status is TaskStatus.DONE
+    assert task.metadata["worktree"]["path"]
+    worktree_path = Path(task.metadata["worktree"]["path"])
+    assert worktree_path.is_relative_to(git_repo / ".wt")
+    assert (git_repo / "app.txt").read_text(encoding="utf-8") == "base\n"
+    assert (worktree_path / "app.txt").read_text(encoding="utf-8") == "worktree-routed\n"
+
+    events = SessionStore(EventStore(RuntimeLayout(git_repo))).replay(shell.session_id)
+    assert any(
+        event["event_type"] == "auto_orchestrator_decision"
+        and (event.get("payload") or {}).get("reason") == "shell_local_worktree"
+        for event in events
+    )
+    assert any(event["event_type"] == "auto_worktree_routed" for event in events)
+
+    output = stdout.getvalue()
+    assert "[ASSISTANT]" in output
+    assert "routed-done" in output
+
+
+def test_shell_worktree_command_works_from_nested_git_workspace_root(
+    git_repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nested_dir = git_repo / "src" / "feature"
+    nested_dir.mkdir(parents=True, exist_ok=False)
+    monkeypatch.chdir(nested_dir)
+    monkeypatch.setenv("CODELITE_LLM_API_KEY", "")
+    monkeypatch.setenv("CODELITE_EMBEDDING_API_KEY", "")
+    monkeypatch.setenv("CODELITE_RERANK_API_KEY", "")
+    monkeypatch.setenv("TAVILY_API_KEY", "")
+
+    services = build_runtime(model_client=WorktreeRouteModelClient())
+    assert services.layout.workspace_root == git_repo.resolve()
+    assert services.worktree_manager is not None
+
+    shell = CodeLiteShell(services)
+    stdout = io.StringIO()
+    with redirect_stdout(stdout):
+        assert shell._handle_local_command("/worktree Update app.txt inside the managed worktree.") is True
+
+    expected_task_id = f"shell-{shell.session_id[-8:]}-turn-01"
+    task = TaskStore(RuntimeLayout(git_repo)).get_task(expected_task_id)
+    assert task is not None
+    assert task.status is TaskStatus.DONE
+    worktree_path = Path(task.metadata["worktree"]["path"])
+    assert worktree_path.is_relative_to(git_repo / ".wt")
+    assert (git_repo / "app.txt").read_text(encoding="utf-8") == "base\n"
+    assert (worktree_path / "app.txt").read_text(encoding="utf-8") == "worktree-routed\n"
 
     output = stdout.getvalue()
     assert "[ASSISTANT]" in output

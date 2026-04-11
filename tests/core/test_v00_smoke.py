@@ -65,6 +65,21 @@ def run_cli(
     )
 
 
+def _git(repo: Path, *args: str) -> str:
+    completed = subprocess.run(
+        ["git", "-C", str(repo), *args],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    output = "\n".join(part for part in (completed.stdout, completed.stderr) if part).strip()
+    if completed.returncode != 0:
+        raise AssertionError(f"git {' '.join(args)} failed\n{output}")
+    return output
+
+
 class ScriptedModelClient:
     def __init__(self) -> None:
         self.calls = 0
@@ -200,6 +215,55 @@ def test_v00_cli_health_from_system32_falls_back_to_safe_workspace() -> None:
     assert payload["workspace_root"] == str(repo)
     assert payload["cwd"] == str(system32)
     assert "PermissionError" not in result.stderr
+
+
+def test_v00_resolve_workspace_root_promotes_nested_git_directory(
+    workspace_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _git(workspace_dir, "init", "-b", "main")
+    _git(workspace_dir, "config", "user.email", "nested@example.com")
+    _git(workspace_dir, "config", "user.name", "Nested Repo Tester")
+    nested_dir = workspace_dir / "src" / "feature"
+    nested_dir.mkdir(parents=True, exist_ok=False)
+
+    monkeypatch.chdir(nested_dir)
+
+    resolved = config_loader.resolve_workspace_root()
+
+    assert resolved == workspace_dir.resolve()
+
+
+def test_v00_cli_health_from_nested_git_directory_uses_git_root_as_workspace(
+    workspace_dir: Path,
+) -> None:
+    _git(workspace_dir, "init", "-b", "main")
+    _git(workspace_dir, "config", "user.email", "nested@example.com")
+    _git(workspace_dir, "config", "user.name", "Nested Repo Tester")
+    nested_dir = workspace_dir / "src" / "feature"
+    nested_dir.mkdir(parents=True, exist_ok=False)
+
+    repo = Path(__file__).resolve().parents[2]
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(repo) + os.pathsep + env.get("PYTHONPATH", "")
+    env.pop("CODELITE_WORKSPACE_ROOT", None)
+    env["CODELITE_LLM_API_KEY"] = ""
+    env["CODELITE_EMBEDDING_API_KEY"] = ""
+    env["CODELITE_RERANK_API_KEY"] = ""
+    env["TAVILY_API_KEY"] = ""
+
+    result = subprocess.run(
+        [sys.executable, "-m", "codelite.cli", "health", "--json"],
+        cwd=nested_dir,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    payload = json.loads(result.stdout)
+
+    assert payload["workspace_root"] == str(workspace_dir.resolve())
+    assert payload["cwd"] == str(nested_dir.resolve())
 
 
 def test_v00_loads_keys_from_dotenv(workspace_dir: Path) -> None:

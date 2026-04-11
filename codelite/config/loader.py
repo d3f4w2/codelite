@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -137,6 +138,9 @@ def resolve_workspace_root(workspace_root: Path | None = None) -> Path:
         return Path(workspace_root).resolve()
 
     cwd = Path.cwd().resolve()
+    git_root = _git_toplevel(cwd)
+    if git_root is not None and _can_auto_use_workspace(git_root):
+        return git_root
     if _can_auto_use_workspace(cwd):
         return cwd
 
@@ -295,6 +299,28 @@ def _require(data: Mapping[str, Any], dotted_key: str) -> Any:
 
 def _can_auto_use_workspace(path: Path) -> bool:
     return path.exists() and path.is_dir() and not _is_protected_system_dir(path) and os.access(path, os.W_OK)
+
+
+def _git_toplevel(path: Path) -> Path | None:
+    candidate = Path(path).resolve()
+    if candidate.exists() and candidate.is_file():
+        candidate = candidate.parent
+    if not candidate.exists():
+        return None
+    completed = subprocess.run(
+        ["git", "-C", str(candidate), "rev-parse", "--show-toplevel"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if completed.returncode != 0:
+        return None
+    resolved = completed.stdout.strip()
+    if not resolved:
+        return None
+    return Path(resolved).resolve()
 
 
 def _is_protected_system_dir(path: Path) -> bool:

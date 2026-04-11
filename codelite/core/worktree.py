@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
 import subprocess
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -52,7 +53,6 @@ class WorktreeManager:
         self._ensure_git_workspace()
 
     def prepare(self, task_id: str, *, title: str = "", base_ref: str = "HEAD") -> WorktreeRecord:
-        key = _worktree_key(task_id)
         metadata_path = self.record_path(task_id)
         existing = self.get_record(task_id)
         git_worktrees = self._git_worktrees_by_path()
@@ -71,13 +71,23 @@ class WorktreeManager:
 
         branch = self.branch_name(task_id)
         worktree_path = self.worktree_path(task_id, title=title)
+        worktree_path.parent.mkdir(parents=True, exist_ok=True)
         if worktree_path.exists() and worktree_path.resolve() != self.workspace_root:
             raise WorktreeError(f"worktree path already exists: {worktree_path}")
 
-        if self._branch_exists(branch):
-            self._git("worktree", "add", str(worktree_path), branch)
-        else:
-            self._git("worktree", "add", "-b", branch, str(worktree_path), base_ref)
+        branch_existed = self._branch_exists(branch)
+        try:
+            if branch_existed:
+                self._git("worktree", "add", str(worktree_path), branch)
+            else:
+                self._git("worktree", "add", "-b", branch, str(worktree_path), base_ref)
+        except WorktreeError:
+            self._cleanup_failed_prepare(
+                worktree_path=worktree_path,
+                branch=branch,
+                branch_existed=branch_existed,
+            )
+            raise
 
         record = WorktreeRecord(
             task_id=task_id,
@@ -153,12 +163,10 @@ class WorktreeManager:
         return f"task/{_worktree_key(task_id)}"
 
     def worktree_path(self, task_id: str, *, title: str = "") -> Path:
+        del title
         key = _worktree_key(task_id)
-        suffix = _slug(title) if title else ""
         directory_name = f"wt-{key}"
-        if suffix:
-            directory_name += f"-{suffix}"
-        return self.layout.worktrees_dir / directory_name
+        return self.layout.managed_worktrees_root / directory_name
 
     def record_path(self, task_id: str) -> Path:
         return self.record_path_for_key(_worktree_key(task_id))
@@ -232,8 +240,57 @@ class WorktreeManager:
         return {
             path: details
             for path, details in parsed.items()
-            if Path(path).is_relative_to(self.layout.worktrees_dir)
+            if self._is_managed_worktree_path(Path(path))
         }
+
+    def _cleanup_failed_prepare(self, *, worktree_path: Path, branch: str, branch_existed: bool) -> None:
+        self._cleanup_failed_worktree_path(worktree_path)
+        if branch_existed:
+            return
+        if not self._branch_exists(branch):
+            return
+        if self._branch_attached(branch):
+            return
+        try:
+            self._git("branch", "-D", branch)
+        except WorktreeError:
+            return
+
+    def _cleanup_failed_worktree_path(self, worktree_path: Path) -> None:
+        if not worktree_path.exists():
+            return
+        resolved = worktree_path.resolve()
+        if not self._is_managed_worktree_path(resolved):
+            return
+        if worktree_path.is_dir():
+            shutil.rmtree(worktree_path, ignore_errors=True)
+            return
+        try:
+            worktree_path.unlink()
+        except OSError:
+            return
+
+    def _branch_attached(self, branch: str) -> bool:
+        branch_ref = f"refs/heads/{branch}"
+        return any(details.get("branch_ref") == branch_ref for details in self._git_worktrees_by_path().values())
+
+    def _is_managed_worktree_path(self, path: Path) -> bool:
+        resolved = path.resolve()
+        return any(resolved.is_relative_to(root) for root in self._managed_worktree_roots())
+
+    def _managed_worktree_roots(self) -> tuple[Path, ...]:
+        roots = (
+            self.layout.managed_worktrees_root.resolve(),
+            self.layout.worktrees_dir.resolve(),
+        )
+        unique_roots: list[Path] = []
+        seen: set[Path] = set()
+        for root in roots:
+            if root in seen:
+                continue
+            seen.add(root)
+            unique_roots.append(root)
+        return tuple(unique_roots)
 
     def _git(self, *args: str) -> str:
         completed = subprocess.run(
@@ -280,12 +337,6 @@ def _worktree_key(task_id: str) -> str:
     safe = safe[:48].rstrip("._-") or "task"
     digest = hashlib.sha1(stripped.encode("utf-8")).hexdigest()[:8]
     return f"{safe}-{digest}"
-
-
-def _slug(value: str) -> str:
-    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", value.strip()).strip("._-")
-    cleaned = cleaned.lower()
-    return cleaned[:32]
 
 
 def _short_branch_name(branch_ref: str | None) -> str | None:

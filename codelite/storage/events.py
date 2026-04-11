@@ -41,6 +41,10 @@ class RuntimeLayout:
         return self.runtime_dir / "worktrees"
 
     @property
+    def managed_worktrees_root(self) -> Path:
+        return self.workspace_root / ".wt"
+
+    @property
     def worktrees_index_dir(self) -> Path:
         return self.worktrees_dir / ".index"
 

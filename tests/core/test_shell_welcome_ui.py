@@ -380,7 +380,7 @@ def test_shell_command_specs_use_chinese_descriptions() -> None:
 
 def test_shell_command_specs_include_resume_rename_and_subagents() -> None:
     specs = {item.name for item in CodeLiteShell._command_specs()}
-    assert {"resume", "rename", "subagents", "new"} <= specs
+    assert {"resume", "rename", "subagents", "new", "worktree"} <= specs
 
 
 def test_shell_command_help_and_specs_stay_in_sync() -> None:
@@ -452,6 +452,7 @@ def test_shell_public_workbench_commands_are_discoverable_and_callable(
         assert shell._handle_local_command("/lanes") is True
         assert shell._handle_local_command("/delivery") is True
         assert shell._handle_local_command("/background") is True
+        assert shell._handle_local_command("/worktree") is True
 
     output = stdout.getvalue()
 
@@ -460,6 +461,7 @@ def test_shell_public_workbench_commands_are_discoverable_and_callable(
     assert "Model / Resilience / Critic Panel" in output
     assert "Queue Board" in output
     assert "MCP / Background / Validate Panel" in output
+    assert "Managed Worktrees" in output
 
 
 def test_shell_prints_welcome_screen_before_prompt(

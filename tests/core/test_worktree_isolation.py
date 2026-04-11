@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from codelite.core.worktree import WorktreeManager
+from codelite.core.worktree import WorktreeError, WorktreeManager
 
 
 def git(repo: Path, *args: str) -> str:
@@ -77,6 +77,8 @@ def test_worktree_manager_isolates_task_changes(git_repo: Path) -> None:
     second_path = Path(second.path)
     assert first_path.exists()
     assert second_path.exists()
+    assert first_path.is_relative_to(git_repo / ".wt")
+    assert second_path.is_relative_to(git_repo / ".wt")
     assert first.branch != second.branch
 
     managed = manager.list_managed()
@@ -118,6 +120,7 @@ def test_worktree_cli_prepare_list_and_remove(git_repo: Path) -> None:
     assert prepared_payload["task_id"] == "cli-demo"
     assert prepared_payload["attached"] is True
     assert Path(prepared_payload["path"]).exists()
+    assert Path(prepared_payload["path"]).is_relative_to(git_repo / ".wt")
 
     listed = run_cli(git_repo, "worktree", "list", "--json")
     listed_payload = json.loads(listed.stdout)
@@ -158,3 +161,49 @@ def test_worktree_cli_recovers_when_index_is_missing(git_repo: Path) -> None:
     assert removed_b["attached"] is False
     assert removed_a["path_exists"] is False
     assert removed_b["path_exists"] is False
+
+
+def test_worktree_manager_lists_and_removes_legacy_runtime_worktree(git_repo: Path) -> None:
+    manager = WorktreeManager(git_repo)
+    branch = manager.branch_name("legacy-demo")
+    legacy_path = manager.layout.worktrees_dir / "wt-legacy-demo"
+
+    git(git_repo, "worktree", "add", "-b", branch, str(legacy_path), "HEAD")
+
+    record = next(item for item in manager.list_managed() if item.task_id == "legacy-demo")
+    assert Path(record.path) == legacy_path.resolve()
+    assert record.attached is True
+    assert record.path_exists is True
+
+    removed = manager.remove("legacy-demo")
+    assert removed.attached is False
+    assert removed.path_exists is False
+    assert not legacy_path.exists()
+
+
+def test_worktree_manager_cleans_orphan_branch_and_partial_path_on_prepare_failure(
+    git_repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = WorktreeManager(git_repo)
+    task_id = "cleanup-demo"
+    branch = manager.branch_name(task_id)
+    failed_path = manager.worktree_path(task_id, title="Cleanup Demo")
+    original_git = manager._git
+
+    def fake_git(*args: str) -> str:
+        if args[:3] == ("worktree", "add", "-b"):
+            original_git("branch", args[3], args[5])
+            failed_path.mkdir(parents=True, exist_ok=True)
+            (failed_path / "partial.txt").write_text("partial\n", encoding="utf-8")
+            raise WorktreeError("simulated create failure")
+        return original_git(*args)
+
+    monkeypatch.setattr(manager, "_git", fake_git)
+
+    with pytest.raises(WorktreeError, match="simulated create failure"):
+        manager.prepare(task_id, title="Cleanup Demo")
+
+    assert manager._branch_exists(branch) is False
+    assert failed_path.exists() is False
+    assert manager.get_record(task_id) is None

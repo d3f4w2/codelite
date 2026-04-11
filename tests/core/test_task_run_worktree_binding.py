@@ -128,6 +128,7 @@ def test_task_run_executes_inside_managed_worktree_and_updates_task(
 
     worktree_path = Path(payload["worktree"]["path"])
     assert worktree_path.exists()
+    assert worktree_path.is_relative_to(git_repo / ".wt")
     assert (git_repo / "app.txt").read_text(encoding="utf-8") == "base\n"
     assert (worktree_path / "app.txt").read_text(encoding="utf-8") == "worktree-output\n"
 

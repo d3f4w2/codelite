@@ -132,6 +132,7 @@ _SHELL_LOCAL_COMMANDS: tuple[_ShellLocalCommand, ...] = (
     _ShellLocalCommand("todo", "todo", "Show current todo snapshot", "show todo snapshot"),
     _ShellLocalCommand("tasks", "tasks", "Show task board", "show task board"),
     _ShellLocalCommand("task", "task ...", "Task actions (show/claim/release/block/retry/jump)", "task actions"),
+    _ShellLocalCommand("worktree", "worktree ...", "Run prompt in managed worktree (or list/remove)", "在托管 worktree 中执行任务"),
     _ShellLocalCommand("team", "team ...", "Run Agent Team demo (default), or /team board for board view", "run or view agent team"),
     _ShellLocalCommand("subagents", "subagents ...", "Alias of /team run <task>", "alias of /team run"),
     _ShellLocalCommand("turns", "turns [N]", "Turn fold view (error turns first)", "show folded turns"),
@@ -3078,6 +3079,18 @@ class CodeLiteShell:
             todo_snapshot=snapshot,
         )
 
+    def _explicit_worktree_decision(self, prompt: str) -> AutoOrchestrationDecision:
+        normalized_prompt = " ".join(prompt.strip().split())
+        return AutoOrchestrationDecision(
+            require_plan=self.mode is ShellMode.PLAN,
+            require_worktree=True,
+            reason="shell_local_worktree",
+            complexity_score=0,
+            matched_plan_keywords=[],
+            matched_worktree_keywords=["worktree"],
+            task_title_hint=normalized_prompt[:80] if normalized_prompt else "shell task",
+        )
+
     def _run_agent_loop_turn(
         self,
         prompt: str,
@@ -3301,6 +3314,108 @@ class CodeLiteShell:
         )
         if self._pending_plan_confirmation is None:
             self._stage_memory_candidate(cleaned)
+
+    def _run_explicit_worktree_turn(self, prompt: str) -> None:
+        cleaned_prompt = prompt.strip()
+        if not cleaned_prompt:
+            self._handle_worktree_local_command([])
+            return
+
+        display_raw = f"/worktree {cleaned_prompt}"
+        turn_started_at = time.monotonic()
+        self._remember_history(display_raw)
+        self.turn_index += 1
+        current_turn = self.turn_index
+        self._grouped_events = {}
+        self._tool_cards = []
+        self._pending_tool_arguments = {}
+        self._pending_tool_status = {}
+        self._status_lines_current_turn = []
+        self._status_block_line_count = 0
+        self._pending_plan_confirmation = None
+        self._milestones_emitted_current_turn = set()
+        self._status_events_current_turn = []
+        self._live_turn_line_count = 0
+        self._live_turn_active = False
+        self._assistant_live_text = ""
+        self._submitted_live_prompt = display_raw
+        turn_timeout_sec = self._shell_turn_timeout_sec()
+        timeout_error_message = self._shell_turn_timeout_message(turn_timeout_sec)
+        decision = self._explicit_worktree_decision(cleaned_prompt)
+
+        listener = self._build_session_listener()
+        self.services.session_store.add_listener(listener)
+        try:
+            self.services.session_store.append_event(
+                self.session_id,
+                "auto_orchestrator_decision",
+                decision.to_dict(),
+            )
+            header = self.renderer.render_turn_header(turn_index=current_turn, mode=self.mode, raw=display_raw)
+            if header.strip():
+                print(header)
+            if self.renderer.is_codex_style() and self._supports_status_block_streaming():
+                self._live_turn_active = True
+                self._refresh_live_turn_display()
+            task_id = self._turn_task_id(current_turn)
+            self._remember_group_event("Mechanism", f"explicit /worktree route: {task_id}")
+            try:
+                answer = self._run_with_optional_spinner(
+                    lambda: self._run_worktree_turn(
+                        task_id=task_id,
+                        raw=cleaned_prompt,
+                        cleaned=cleaned_prompt,
+                        decision=decision,
+                        turn_timeout_sec=turn_timeout_sec,
+                        timeout_error_message=timeout_error_message,
+                        force_plan_prompt=self.mode is ShellMode.PLAN,
+                    )
+                )
+            except Exception as exc:
+                self._remember_group_event("Mechanism", f"explicit /worktree failed: {task_id}")
+                self._append_status_event_line(kind="error", line=self._compact_preview(str(exc), max_chars=88))
+                self._print_status_block()
+                self._record_turn_history(
+                    turn_index=current_turn,
+                    prompt=display_raw,
+                    status="error",
+                    answer_preview="",
+                    error=str(exc),
+                    grouped_events=self._grouped_events,
+                )
+                self._submitted_live_prompt = ""
+                self._assistant_live_text = ""
+                try:
+                    setattr(exc, "_shell_rendered", True)
+                except Exception:
+                    pass
+                raise
+        finally:
+            self.services.session_store.remove_listener(listener)
+
+        if self.mode is ShellMode.ACT:
+            self._ensure_minimum_milestones()
+
+        self._append_status_event_line(kind="done", line="response ready")
+        self._print_status_block()
+        self._print_assistant_output(answer)
+        self._submitted_live_prompt = ""
+        self._maybe_set_pending_plan_confirmation(answer)
+        self._record_turn_history(
+            turn_index=current_turn,
+            prompt=display_raw,
+            status="done",
+            answer_preview=answer[:200],
+            error="",
+            grouped_events=self._grouped_events,
+        )
+        self._print_post_turn_summary(
+            turn_index=current_turn,
+            current_task_id=task_id,
+            elapsed_s=time.monotonic() - turn_started_at,
+        )
+        if self._pending_plan_confirmation is None:
+            self._stage_memory_candidate(display_raw)
 
     def _shell_turn_timeout_sec(self) -> float | None:
         raw_value = getattr(self.services.config.runtime, "shell_timeout_sec", 0)
@@ -4394,6 +4509,9 @@ class CodeLiteShell:
         if command == "task":
             self._handle_task_command(args)
             return True
+        if command == "worktree":
+            self._handle_worktree_local_command(args)
+            return True
         if command == "team":
             self._handle_team_command(args)
             return True
@@ -4911,6 +5029,93 @@ class CodeLiteShell:
             self._print_runtime_workbench_panel()
             return
         print("Unknown runtime command. Use status|refresh.")
+
+    def _handle_worktree_local_command(self, args: list[str]) -> None:
+        manager = self.services.worktree_manager
+        if not args or args[0].lower() in {"help", "-h", "--help"}:
+            items = [
+                "usage: /worktree <prompt>",
+                "usage: /worktree list",
+                "usage: /worktree remove <task-id> [--force]",
+            ]
+            if manager is None:
+                summary = "managed worktrees unavailable"
+                items.append("workspace is not a git toplevel")
+            else:
+                records = manager.list_managed()
+                summary = f"managed={len(records)}"
+                if records:
+                    items.extend(
+                        f"{record.task_id} | attached={'yes' if record.attached else 'no'} | {record.path}"
+                        for record in records[:5]
+                    )
+                    if len(records) > 5:
+                        items.append(f"... {len(records) - 5} more worktrees")
+                else:
+                    items.append("no managed worktrees")
+            print(
+                self.renderer.render_named_board(
+                    title="Managed Worktrees",
+                    summary=summary,
+                    items=items,
+                    empty_text="no managed worktrees",
+                )
+            )
+            return
+
+        if manager is None:
+            print("Managed worktrees unavailable: current workspace is not a git toplevel.")
+            return
+
+        action = args[0].lower()
+        if action in {"list", "ls"}:
+            records = manager.list_managed()
+            items = [
+                f"{record.task_id} | attached={'yes' if record.attached else 'no'} | exists={'yes' if record.path_exists else 'no'} | {record.path}"
+                for record in records
+            ]
+            print(
+                self.renderer.render_named_board(
+                    title="Managed Worktrees",
+                    summary=f"managed={len(records)}",
+                    items=items,
+                    empty_text="no managed worktrees",
+                )
+            )
+            return
+
+        if action == "remove":
+            force = False
+            task_tokens: list[str] = []
+            for item in args[1:]:
+                if item == "--force":
+                    force = True
+                    continue
+                task_tokens.append(item)
+            task_id = " ".join(task_tokens).strip()
+            if not task_id:
+                print("Usage: /worktree remove <task-id> [--force]")
+                return
+            try:
+                record = manager.remove(task_id, force=force)
+            except Exception as exc:
+                print(f"worktree remove failed: {exc}")
+                return
+            print(
+                self.renderer.render_named_board(
+                    title="Managed Worktree Removed",
+                    summary=f"task_id={record.task_id}",
+                    items=[
+                        f"path: {record.path}",
+                        f"attached: {'yes' if record.attached else 'no'}",
+                        f"path_exists: {'yes' if record.path_exists else 'no'}",
+                    ],
+                    empty_text="remove failed",
+                )
+            )
+            return
+
+        self._run_explicit_worktree_turn(" ".join(args).strip())
 
     def _handle_memory_command(self, args: list[str]) -> None:
         if not args:
