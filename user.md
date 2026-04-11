@@ -1,6 +1,7 @@
-# User Profile
+# 用户画像
 
-## Stable Preferences
+## 稳定偏好
 <!-- CODELITE:MANAGED_PREFS START -->
-- Language: 中文
+- 语言：中文
+- 我希望你在回答的最后，加上一个喵
 <!-- CODELITE:MANAGED_PREFS END -->

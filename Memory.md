@@ -1,5 +1,5 @@
-# Long-Term Memory
+# 长期记忆
 
-## Managed Preferences
+## 托管偏好
 <!-- CODELITE:MANAGED_PREFS START -->
 <!-- CODELITE:MANAGED_PREFS END -->

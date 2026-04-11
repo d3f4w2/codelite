@@ -137,6 +137,40 @@ def test_shell_renderer_codex_live_input_is_compact() -> None:
     assert "L1/1:C" not in rendered
 
 
+def test_shell_renderer_codex_submitted_prompt_snapshot_preserves_prompt_without_cursor() -> None:
+    renderer = ShellRenderer(width=110)
+
+    lines = renderer.render_submitted_prompt_snapshot(
+        submitted_text="hi",
+        mode=ShellMode.ACT,
+        workspace_name="test",
+        session_id="demo-abcd",
+        runtime_summary="runtime red=2",
+    )
+    rendered = "\n".join(lines)
+
+    assert lines[0].startswith("> hi")
+    assert "█" not in rendered
+    assert "s:abcd" in lines[-1]
+    assert "runtime red=2" in lines[-1]
+
+
+def test_shell_renderer_codex_submitted_prompt_snapshot_supports_multiline() -> None:
+    renderer = ShellRenderer(width=110)
+
+    lines = renderer.render_submitted_prompt_snapshot(
+        submitted_text="first line\nsecond line",
+        mode=ShellMode.ACT,
+        workspace_name="test",
+        session_id="demo-abcd",
+    )
+    rendered = "\n".join(lines)
+
+    assert lines[0].startswith("> first line")
+    assert any("second line" in line for line in lines[1:])
+    assert "█" not in rendered
+
+
 def test_shell_renderer_codex_slash_palette_expands_on_prefix_even_if_focus_resets() -> None:
     renderer = ShellRenderer(width=110)
     model = ShellInputModel(
@@ -462,6 +496,24 @@ def test_shell_public_workbench_commands_are_discoverable_and_callable(
     assert "Queue Board" in output
     assert "MCP / Background / Validate Panel" in output
     assert "Managed Worktrees" in output
+
+
+def test_shell_paint_submitted_prompt_snapshot_prints_immediately(
+    workspace_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CODELITE_WORKSPACE_ROOT", str(workspace_dir))
+
+    shell = CodeLiteShell(build_runtime(workspace_dir))
+    stdout = io.StringIO()
+    with redirect_stdout(stdout):
+        line_count = shell._paint_submitted_prompt_snapshot(submitted_prompt="hi", previous_line_count=0)
+
+    output = stdout.getvalue()
+
+    assert line_count >= 2
+    assert "> hi" in output
+    assert "█" not in output
 
 
 def test_shell_prints_welcome_screen_before_prompt(

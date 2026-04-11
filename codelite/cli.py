@@ -1953,6 +1953,7 @@ class CodeLiteShell:
         self._status_block_line_count = 0
 
         self._submitted_live_prompt = ""
+        self._submitted_snapshot_line_count = 0
 
         self._live_turn_line_count = 0
 
@@ -1996,18 +1997,25 @@ class CodeLiteShell:
 
             try:
                 if self._handle_plan_confirmation_input(raw):
+                    self._submitted_snapshot_line_count = 0
                     continue
                 if self._handle_plan_clarification_input(raw):
+                    self._submitted_snapshot_line_count = 0
                     continue
                 if not raw:
+                    self._submitted_snapshot_line_count = 0
                     continue
                 if self._handle_pending_memory_candidate_input(raw):
+                    self._submitted_snapshot_line_count = 0
                     continue
                 if self._handle_local_command(raw):
+                    self._submitted_snapshot_line_count = 0
                     continue
                 if self._handle_nl_local_shortcut(raw):
+                    self._submitted_snapshot_line_count = 0
                     continue
                 if self._maybe_start_plan_clarification(raw):
+                    self._submitted_snapshot_line_count = 0
                     continue
                 self._run_agent_turn(raw)
             except Exception as exc:  # pragma: no cover
@@ -2876,15 +2884,26 @@ class CodeLiteShell:
                     continue
                 raw = model.consume()
                 self.mode = model.mode
-                self._clear_live_input(line_count)
+                submitted = raw.rstrip("\r\n")
+                if submitted:
+                    line_count = self._paint_submitted_prompt_snapshot(
+                        submitted_prompt=submitted,
+                        previous_line_count=line_count,
+                    )
+                    self._submitted_snapshot_line_count = line_count
+                else:
+                    self._clear_live_input(line_count)
+                    self._submitted_snapshot_line_count = 0
                 return raw
             if key == "\x03":
                 self.mode = model.mode
                 self._clear_live_input(line_count)
+                self._submitted_snapshot_line_count = 0
                 raise KeyboardInterrupt
             if key == "\x1a":
                 self.mode = model.mode
                 self._clear_live_input(line_count)
+                self._submitted_snapshot_line_count = 0
                 raise EOFError
             if key == "\x08" or virtual_key == VK_BACK:
                 model.backspace()
@@ -2979,6 +2998,21 @@ class CodeLiteShell:
         sys.stdout.flush()
         return len(lines)
 
+    def _paint_submitted_prompt_snapshot(self, *, submitted_prompt: str, previous_line_count: int) -> int:
+        lines = self.renderer.render_submitted_prompt_snapshot(
+            submitted_text=submitted_prompt,
+            mode=self.mode,
+            workspace_name=self.services.layout.workspace_root.name,
+            session_id=self.session_id,
+            runtime_summary=self._runtime_status_summary(),
+        )
+        if previous_line_count:
+            self._clear_live_input(previous_line_count)
+        payload = "\n".join(f"\r\033[2K{line}" for line in lines)
+        sys.stdout.write(payload)
+        sys.stdout.flush()
+        return len(lines)
+
     def _render_live_turn_lines(self) -> list[str]:
         lines = self._render_submitted_prompt_snapshot(include_cursor=True)
 
@@ -2991,6 +3025,15 @@ class CodeLiteShell:
         return lines
 
     def _render_submitted_prompt_snapshot(self, *, include_cursor: bool) -> list[str]:
+        lines = self.renderer.render_submitted_prompt_snapshot(
+            submitted_text=self._submitted_live_prompt,
+            mode=self.mode,
+            workspace_name=self.services.layout.workspace_root.name,
+            session_id=self.session_id,
+            runtime_summary=self._runtime_status_summary(),
+        )
+        del include_cursor
+        return lines
         waiting_model = ShellInputModel(
             commands=self._command_specs(),
             skills=self._skill_specs(),
@@ -3199,6 +3242,8 @@ class CodeLiteShell:
         cleaned = raw.strip()
         if cleaned:
             self._remember_history(cleaned)
+        previous_snapshot_line_count = self._submitted_snapshot_line_count
+        self._submitted_snapshot_line_count = 0
         self.turn_index += 1
         current_turn = self.turn_index
         self._grouped_events = {}
@@ -3211,7 +3256,7 @@ class CodeLiteShell:
         self._milestones_emitted_current_turn = set()
         self._status_events_current_turn = []
 
-        self._live_turn_line_count = 0
+        self._live_turn_line_count = previous_snapshot_line_count
 
         self._live_turn_active = False
 
@@ -3324,6 +3369,8 @@ class CodeLiteShell:
         display_raw = f"/worktree {cleaned_prompt}"
         turn_started_at = time.monotonic()
         self._remember_history(display_raw)
+        previous_snapshot_line_count = self._submitted_snapshot_line_count
+        self._submitted_snapshot_line_count = 0
         self.turn_index += 1
         current_turn = self.turn_index
         self._grouped_events = {}
@@ -3335,7 +3382,7 @@ class CodeLiteShell:
         self._pending_plan_confirmation = None
         self._milestones_emitted_current_turn = set()
         self._status_events_current_turn = []
-        self._live_turn_line_count = 0
+        self._live_turn_line_count = previous_snapshot_line_count
         self._live_turn_active = False
         self._assistant_live_text = ""
         self._submitted_live_prompt = display_raw

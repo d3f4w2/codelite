@@ -1,14 +1,14 @@
-# Agent Contract
+# Agent 合约
 
-## Role
-- Define primary system constraints and task navigation here.
+## 角色
+- 在此定义系统级约束与任务导航。
 
-## Navigation
-- user.md: user preferences
-- soul.md: response style and principles
-- tool.md: tool usage policies
+## 导航
+- user.md：用户偏好
+- soul.md：回复风格与原则
+- tool.md：工具使用策略
 
-## Managed Preferences
+## 托管偏好
 <!-- CODELITE:MANAGED_PREFS START -->
-- Keep outputs concise and actionable.
+- 输出尽量简洁、可执行。
 <!-- CODELITE:MANAGED_PREFS END -->

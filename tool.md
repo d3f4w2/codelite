@@ -1,6 +1,6 @@
-# Tool Policy
+# 工具策略
 
-## Tool Preferences
+## 工具偏好
 <!-- CODELITE:MANAGED_PREFS START -->
-- Prefer deterministic commands and explicit file paths.
+- 优先使用确定性命令与显式路径。
 <!-- CODELITE:MANAGED_PREFS END -->

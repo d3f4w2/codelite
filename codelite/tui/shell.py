@@ -944,6 +944,51 @@ class ShellRenderer:
         lines.append(self._rule(self._line_char()))
         return lines
 
+    def render_submitted_prompt_snapshot(
+        self,
+        *,
+        submitted_text: str,
+        mode: ShellMode,
+        workspace_name: str,
+        session_id: str,
+        runtime_summary: str = "",
+    ) -> list[str]:
+        prompt_lines = submitted_text.splitlines() or [submitted_text or ""]
+        if self.is_codex_style():
+            mode_chip = self._mode_chip(mode)
+            session_tail = session_id[-4:] if session_id else "----"
+            status_line = f"{mode_chip}{self._sep()}s:{session_tail}"
+            if runtime_summary:
+                status_line += f"{self._sep()}{runtime_summary}"
+            lines = [self._fit(f"> {prompt_lines[0]}", self.width)]
+            for line in prompt_lines[1:]:
+                lines.append(self._fit(f"  {line}", self.width))
+            lines.append(self._fit(status_line, self.width))
+            return lines
+
+        lines = [self._rule(self._line_char())]
+        lines.append(
+            self._fit(
+                self._live_status_line(
+                    mode=mode,
+                    focus=ShellInputFocus.EDITOR,
+                    workspace_name=workspace_name,
+                    session_id=session_id,
+                    line_idx=0,
+                    col_idx=len(prompt_lines[-1]) if prompt_lines else 0,
+                    total_lines=len(prompt_lines),
+                    selected=None,
+                    selected_prefix="",
+                    runtime_summary=runtime_summary,
+                ),
+                self.width,
+            )
+        )
+        for index, line in enumerate(prompt_lines):
+            prefix = ">" if index == 0 else self._dim(self._glyph("·", "|"))
+            lines.append(self._fit(f"{prefix} {line}", self.width))
+        return lines
+
     def _compact_section(self, title: str, lines: list[str]) -> list[str]:
         heading = f"{self._accent('*')}{self._label(title)}"
         return [heading, *[self._fit(line, self.width) for line in lines]]
